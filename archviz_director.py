@@ -31,11 +31,32 @@ sys.path.insert(0, PKG_DIR)
 from core import identity as ID            # noqa: E402
 from core import prompts_archviz as P      # noqa: E402
 
-# 1x1 PNG used as a placeholder asset in dry-run.
+# 64x64 white PNG used as a placeholder asset in dry-run. A 1x1 image makes some
+# LoadImage builds crash inside PyAV, so we keep it comfortably sized + valid.
 _PLACEHOLDER_PNG = base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCC"
+    "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAfElEQVR4nNXOQREAIADDsFL/no"
+    "cIHlyjIGcbZRIncRIncRIncRIncRIncRIncRIncRIncRIncRIncRIncRIncRIncRIncRIncRIn"
+    "cRIncRIncRIncRIncRIncRIncRIncRIncRIncRIncRIncRIncRIncRIncRIncf4OvLpyqgN9ZS"
+    "iDcwAAAABJRU5ErkJggg=="
 )
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
+
+
+def _usable_ref(path):
+    """True if path is a readable image > 1 KB. Guards against stale/corrupt
+    placeholders (e.g. dry-run leftovers) crashing a live generation."""
+    try:
+        if not os.path.isfile(path) or os.path.getsize(path) < 1024:
+            return False
+        from PIL import Image
+        with Image.open(path) as im:
+            im.verify()
+        return True
+    except ImportError:
+        # PIL unavailable: fall back to a size check only.
+        return os.path.isfile(path) and os.path.getsize(path) >= 1024
+    except Exception:
+        return False
 
 
 # --------------------------------------------------------------------------- #
@@ -231,7 +252,15 @@ class ComfyClient:
             base.pop(str(legacy), None)
 
         # Upload references once and add a LoadImage node per reference.
-        refs = [r for r in (ref_paths or []) if r and os.path.isfile(r)][:self.MAX_REFS]
+        # Skip unreadable/corrupt files (e.g. stale dry-run placeholders) so one
+        # bad reference can't crash the whole generation.
+        refs = []
+        for r in (ref_paths or []):
+            if _usable_ref(r):
+                refs.append(r)
+            elif r and os.path.isfile(r):
+                print(f"    [skip ref] unreadable image ignored: {os.path.basename(r)}")
+        refs = refs[:self.MAX_REFS]
         next_id = 100
         for i, ref in enumerate(refs, 1):
             up = self.api.upload_image(self.url, ref)
