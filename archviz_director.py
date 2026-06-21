@@ -83,8 +83,8 @@ LIMITS = {
     # Stage P: ultra-photoreal locked image via Nano Banana Pro.
     "photoreal":          True,
     "hero_resolution":    "2K",   # 1K | 2K | 4K
-    "photoreal_min":      85,     # realism score (0-100) required to stop
-    "photoreal_attempts": 2,      # max Pro re-renders per scene
+    "photoreal_min":      80,     # realism score (0-100) required to stop
+    "photoreal_attempts": 3,      # max Pro re-renders per scene
 }
 
 # Names/keywords that aren't worth a dedicated identity packshot (exterior clutter).
@@ -793,21 +793,52 @@ def stage_audio(root, n, client, kokoro_voice="af_heart"):
 # --------------------------------------------------------------------------- #
 #  Stages — Phase 4: M (Video)
 # --------------------------------------------------------------------------- #
-def _audio_duration_secs(wav_path):
-    """Read WAV header to get duration (seconds). Falls back to 8.0 on parse error."""
+def _audio_duration_secs(path, fallback=8.0, min_secs=1.0, max_secs=120.0):
+    """Return audio duration in seconds, clamped to a safe range.
+
+    Handles WAV and any other format Kokoro/F5 may output (FLAC, MP3, OGG…).
+    Tries soundfile first (handles all modern formats), then Python's wave module
+    (pure WAV), then a FLAC STREAMINFO raw parser, then falls back.
+    TrimAudioDuration crashes when duration ≤ 0 or > file length, so we clamp.
+    """
+    clamp = lambda d: max(min_secs, min(float(d), max_secs))  # noqa: E731
+
+    # 1. soundfile — handles WAV, FLAC, OGG, MP3, AIFF, etc.
     try:
-        with open(wav_path, "rb") as fh:
-            data = fh.read(44)
-        # bytes 24-27: sample rate  bytes 34-35: bits/sample  bytes 40-43: data chunk size
-        sample_rate  = struct.unpack_from("<I", data, 24)[0]
-        bits_per_smp = struct.unpack_from("<H", data, 34)[0]
-        channels     = struct.unpack_from("<H", data, 22)[0]
-        data_size    = struct.unpack_from("<I", data, 40)[0]
-        if sample_rate and bits_per_smp and channels:
-            return data_size / (sample_rate * channels * (bits_per_smp // 8))
+        import soundfile as _sf
+        info = _sf.info(path)
+        if info.duration > 0:
+            return clamp(info.duration)
     except Exception:
         pass
-    return 8.0   # safe default
+
+    # 2. wave module — pure WAV only, but robust against LIST/INFO chunks.
+    import wave as _wave
+    try:
+        with _wave.open(path, "rb") as wf:
+            frames = wf.getnframes()
+            rate   = wf.getframerate()
+            if rate > 0 and frames > 0:
+                return clamp(frames / float(rate))
+    except Exception:
+        pass
+
+    # 3. Manual FLAC STREAMINFO parser (magic b"fLaC", block type 0).
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read(46)
+        if raw[:4] == b"fLaC":
+            # METADATA_BLOCK_HEADER is 4 bytes (offset 4); STREAMINFO starts at 8.
+            b = raw[18:26]   # bytes covering sample_rate + total_samples fields
+            sample_rate    = (b[0] << 12) | (b[1] << 4) | (b[2] >> 4)
+            total_samples  = (((b[3] & 0x0F) << 32)
+                              | (b[4] << 24) | (b[5] << 16) | (b[6] << 8) | b[7])
+            if sample_rate > 0 and total_samples > 0:
+                return clamp(total_samples / sample_rate)
+    except Exception:
+        pass
+
+    return fallback
 
 
 def stage_video(root, n, client, director_frames=""):
@@ -1145,8 +1176,11 @@ def stage_photoreal_finish(root, n, client, attempts=2, min_score=85, resolution
     src = os.path.join(scene_d, "source.png")
     space = ID.read_json(os.path.join(scene_d, "identity", "space.json"),
                          {}).get("description", "")
-    # Locked composition first (the photo to upgrade), then ground truth + identity refs.
-    refs = [locked, src] + list(ID.reference_images(root, n))
+    # Order matters: source screenshot FIRST (spatial/proportional ground truth),
+    # then the locked composition (people positions), then identity packshots.
+    # The prompt tells the model: fix CGI artifacts from the locked image using the
+    # real photograph as the authority on scale, proportions and materials.
+    refs = [src, locked] + list(ID.reference_images(root, n))
     tmp = os.path.join(scene_d, "renders", "_photoreal_try.png")
     feedback = ""
     best_score = -1
@@ -1249,8 +1283,8 @@ def run_scene(root, n, src, client, phases=(1, 2, 3, 4),
     if 2 in phases and LIMITS.get("photoreal", True):
         stage_photoreal_finish(
             root, n, client,
-            attempts=LIMITS.get("photoreal_attempts", 2),
-            min_score=LIMITS.get("photoreal_min", 85),
+            attempts=LIMITS.get("photoreal_attempts", 3),
+            min_score=LIMITS.get("photoreal_min", 80),
             resolution=LIMITS.get("hero_resolution", "2K"))
 
     if 4 in phases:
