@@ -191,26 +191,22 @@
   "314": {
     "class_type": "PrimitiveInt",
     "_title": "Width",
-    "inputs": {},
-    "widgets_values": [1920, "fixed"]
+    "inputs": {"value": 1920}
   },
   "299": {
     "class_type": "PrimitiveInt",
     "_title": "Height",
-    "inputs": {},
-    "widgets_values": [1080, "fixed"]
+    "inputs": {"value": 1080}
   },
   "300": {
     "class_type": "PrimitiveInt",
     "_title": "Frame Rate",
-    "inputs": {},
-    "widgets_values": [24, "fixed"]
+    "inputs": {"value": 24}
   },
   "301": {
     "class_type": "PrimitiveInt",
     "_title": "Length",
-    "inputs": {},
-    "widgets_values": [97, "fixed"]
+    "inputs": {"value": 97}
   },
   "402": {
     "class_type": "ComfyMathExpression",
@@ -346,7 +342,7 @@
     "inputs": {
       "positive": ["305", 0],
       "negative": ["305", 1],
-      "latent": ["309", 0]
+      "latent": ["350", 0]
     }
   },
   "313": {
