@@ -270,6 +270,22 @@ def run_recipe(comfy_url, recipe_api_json_path, patches, out_path, client_id=Non
     return _download(comfy_url, imgs[0], out_path)
 
 
+def run_graph(comfy_url, api_graph, out_path, client_id=None, timeout=1800,
+              extra_data=None):
+    """Queue an already-built in-memory API graph (dict) and save the FIRST image
+    output to out_path. Used when the controller needs to wire a variable number
+    of reference-image nodes that a static recipe file cannot express."""
+    client_id = client_id or uuid.uuid4().hex
+    if "placeholder.png" in json.dumps(api_graph):
+        ensure_placeholder(comfy_url)
+    pid = queue(comfy_url, api_graph, client_id, extra_data=extra_data)
+    hist = wait(comfy_url, pid, timeout=timeout)
+    imgs = collect_images(hist)
+    if not imgs:
+        raise RuntimeError(f"graph produced no images (prompt {pid})")
+    return _download(comfy_url, imgs[0], out_path)
+
+
 def run_recipe_audio(comfy_url, recipe_api_json_path, patches, out_path, client_id=None,
                      timeout=600, extra_data=None):
     """Run a TTS recipe whose output is AUDIO. Saves first audio output to out_path."""

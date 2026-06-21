@@ -48,17 +48,23 @@ ANALYSIS_COORDINATES = (
 #  Stage C/E - NanoBanana generation
 # --------------------------------------------------------------------------- #
 GEN_PACKSHOT_4VIEW = (
-    "Studio product packshot of this exact item on a pure white seamless "
-    "background, soft even studio lighting, no props, no shadows on the subject. "
-    "Show it from FOUR perspectives in a 2x2 grid: front, side, three-quarter, "
-    "and back. Keep the exact same object identity (material, colour, proportions) "
-    "as described: {desc}. Photorealistic, sharp, catalogue quality."
+    "The reference image is a real photograph of the room that contains this item. "
+    "Find the item described below in that photo and create a studio product packshot "
+    "of THAT EXACT item (same material, colour, shape and proportions as seen in the "
+    "photo) on a pure white seamless background, soft even studio lighting, no props, "
+    "no shadows on the subject. Show it from FOUR perspectives in a 2x2 grid: front, "
+    "side, three-quarter, and back. Do not redesign or stylise it. Item: {desc}. "
+    "Photorealistic, sharp, catalogue quality."
 )
 
 GEN_SPACE_MAP = (
-    "Top-down / isometric annotated map of this room. Keep the real layout. Add "
-    "clear text LABELS and coloured SEGMENTATION overlays for each distinct area "
-    "and major furniture group, so each zone is identifiable. Based on: {desc}."
+    "The FIRST reference image is a real photograph of this exact room and is the "
+    "absolute ground truth. Produce a top-down / isometric annotated map of THIS "
+    "EXACT room: reproduce the real layout, proportions, walls, windows and the "
+    "position of every furniture piece exactly as seen in the photo. Do NOT invent, "
+    "move, add or remove anything. Add clear text LABELS and coloured SEGMENTATION "
+    "overlays for each distinct area and major furniture group. Cross-check against "
+    "this description (the photo wins on any conflict): {desc}."
 )
 
 GEN_CHARACTER_SHEET = (
@@ -79,20 +85,28 @@ GEN_CLOTHES_PACKSHOT = (
 )
 
 GEN_EMPTY_SPACE_STABILIZED = (
-    "A clean, photorealistic wide shot of this empty room with its furniture and "
-    "objects exactly where they are, matching the reference layout and the "
-    "provided packshots for every item. Do not add, remove, move or invent any "
-    "furniture or object. Natural architectural lighting. Space: {space}."
+    "The FIRST reference image is a real photograph of this room and is the "
+    "ABSOLUTE GROUND TRUTH for architecture, camera angle, proportions, walls, "
+    "windows, floor and the position of every furniture piece and object. Reproduce "
+    "that EXACT space photorealistically. Use the additional reference images only as "
+    "the identity of individual items. Do NOT add, remove, move, resize, restyle or "
+    "invent any furniture, object or architectural feature \u2014 keep the space identical "
+    "to the photo. Natural architectural lighting. Space description (cross-check only, "
+    "the photo wins on any conflict): {space}."
 )
 
 GEN_HERO_COMPOSITE = (
-    "Photorealistic wide shot of this room, fully dressed, with the spokesman and "
-    "the secondary actors placed naturally according to these positions: {coords}. "
-    "Every person matches their reference sheet exactly (face, hair, outfit). "
-    "Every furniture piece and object matches its packshot and stays in its real "
-    "location. People only interact with objects that already exist in the room. "
-    "Do not invent any new object, prop or person. Natural lighting, cinematic, "
-    "photorealistic. Scene: {space}."
+    "The FIRST reference image is a real photograph of this EXACT room and is the "
+    "absolute ground truth for the space: keep its architecture, camera angle, "
+    "proportions, walls, windows, lighting, floor and the position of every furniture "
+    "piece and object IDENTICAL to the photo. Do not alter, move, restyle or invent any "
+    "part of the space. Using the other reference images for the identity of each person "
+    "and item, place the spokesman and the secondary actors naturally INTO this same "
+    "space according to these positions: {coords}. Every person matches their reference "
+    "sheet exactly (face, hair, outfit). People only interact with objects that already "
+    "exist in the room. Do not invent any new object, prop, person or architectural "
+    "feature. Photorealistic, cinematic, fully consistent with the reference photo. "
+    "Scene description (cross-check only, the photo wins): {space}."
 )
 
 # --------------------------------------------------------------------------- #

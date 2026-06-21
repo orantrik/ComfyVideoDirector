@@ -200,19 +200,66 @@ class ComfyClient:
         return self.api.run_recipe_text(self.url, self.qwen_recipe, patches,
                                         text_node=n["text_out"], extra_data=self._extra())
 
-    def generate(self, prompt, ref_paths, out_path):
-        patches = {}
-        if self.nb_nodes["prompt"]:
-            nb_patch = {"prompt": prompt}
+    MAX_REFS = 14   # GeminiNanoBanana2V2 accepts up to 14 reference images
+
+    def generate(self, prompt, ref_paths, out_path, attempts=3):
+        """Generate one image, wiring EVERY reference image into NanoBanana.
+
+        ref_paths[0] is treated as the ground-truth image (the real room
+        screenshot for space/hero stages) and becomes reference image_1; the
+        prompts instruct the model to keep that space identical. Remaining refs
+        (packshots, character sheets) lock object/person identity.
+
+        Gemini occasionally returns reasoning text instead of an image, so we
+        retry with a fresh seed (and request IMAGE+TEXT on the last try).
+        """
+        import json as _json
+        import copy as _copy
+        import random as _rng
+
+        prompt_node = self.nb_nodes["prompt"]
+        base = _json.load(open(self.nb_recipe, encoding="utf-8"))
+        base = {k: v for k, v in base.items() if not k.startswith("_")}
+
+        # Strip the recipe's hard-wired LoadImage nodes + image_* connections so we
+        # can wire exactly as many references as we actually have.
+        node3_inputs = base[prompt_node].setdefault("inputs", {})
+        for k in list(node3_inputs.keys()):
+            if k.startswith("model.images.image_"):
+                del node3_inputs[k]
+        for legacy in (self.nb_nodes.get("image_1"), self.nb_nodes.get("image_2")):
+            base.pop(str(legacy), None)
+
+        # Upload references once and add a LoadImage node per reference.
+        refs = [r for r in (ref_paths or []) if r and os.path.isfile(r)][:self.MAX_REFS]
+        next_id = 100
+        for i, ref in enumerate(refs, 1):
+            up = self.api.upload_image(self.url, ref)
+            nid = str(next_id); next_id += 1
+            base[nid] = {"class_type": "LoadImage",
+                         "inputs": {"image": up, "upload": "image"}}
+            node3_inputs[f"model.images.image_{i}"] = [nid, 0]
+
+        last_err = None
+        for attempt in range(1, attempts + 1):
+            g = _copy.deepcopy(base)
+            n3 = g[prompt_node]["inputs"]
+            n3["prompt"] = prompt
+            n3["seed"] = _rng.randint(0, 2 ** 31)
             if self.image_model:
-                nb_patch["model"] = self.image_model
-            patches[self.nb_nodes["prompt"]] = nb_patch
-        for slot, key in (("image_1", "image_1"), ("image_2", "image_2")):
-            if self.nb_nodes.get(slot) and ref_paths:
-                up = self.api.upload_image(self.url, ref_paths.pop(0))
-                patches[self.nb_nodes[slot]] = {"image": up}
-        return self.api.run_recipe(self.url, self.nb_recipe, patches, out_path,
-                                   extra_data=self._extra())
+                n3["model"] = self.image_model
+            if attempt == attempts:
+                n3["response_modalities"] = "IMAGE+TEXT"
+            try:
+                return self.api.run_graph(self.url, g, out_path, extra_data=self._extra())
+            except RuntimeError as e:
+                if "did not generate an image" in str(e) and attempt < attempts:
+                    last_err = e
+                    print(f"    [retry {attempt}/{attempts}] Gemini returned no image; "
+                          f"retrying with a new seed\u2026")
+                    continue
+                raise
+        raise last_err
 
     def generate_audio(self, text, ref_audio_path, out_path, voice=None):
         """Generate voiceover via F5-TTS (with ref) or Kokoro TTS (fallback).
@@ -374,6 +421,9 @@ def stage_analyze(root, n, src, client):
 
 
 def stage_packshots(root, n, furniture, objects, client):
+    # The source screenshot anchors object identity (the model must extract the
+    # real item from the real room, not invent a generic one).
+    src = os.path.join(ID.scene_dir(root, n), "source.png")
     for kind, items, dirfn in (("furniture", furniture, ID.furniture_item_dir),
                                ("objects", objects, ID.object_item_dir)):
         for it in items:
@@ -382,21 +432,25 @@ def stage_packshots(root, n, furniture, objects, client):
                           f"{it['name']} | {it['desc']} | {it['location']}")
             packshot = os.path.join(idir, "packshot_4view.png")
             client.generate(P.fill(P.GEN_PACKSHOT_4VIEW,
-                                   desc=f"{it['name']}, {it['desc']}"), [], packshot)
+                                   desc=f"{it['name']}, {it['desc']} ({it['location']})"),
+                            [src], packshot)
             ID.register_scene_item(root, n, kind, it["id"], {
                 "name": it["name"], "desc_path": os.path.join(idir, "desc.txt"),
                 "packshot": packshot, "location": it["location"]})
 
 
 def stage_space_map(root, n, space, client):
+    src = os.path.join(ID.scene_dir(root, n), "source.png")
     out = os.path.join(ID.scene_dir(root, n), "identity", "space_map.png")
-    client.generate(P.fill(P.GEN_SPACE_MAP, desc=space), [], out)
+    client.generate(P.fill(P.GEN_SPACE_MAP, desc=space), [src], out)
     return out
 
 
 def stage_stabilized_space(root, n, space, client):
-    """Stage D: generate the clean empty-space hero conditioned on all packshots."""
-    refs = ID.reference_images(root, n)  # all packshots written so far
+    """Stage D: generate the clean empty-space hero conditioned on the real
+    screenshot (ground truth) + all packshots."""
+    src = os.path.join(ID.scene_dir(root, n), "source.png")
+    refs = [src] + ID.reference_images(root, n)  # screenshot first, then packshots
     out = os.path.join(ID.scene_dir(root, n), "renders", "empty_space_stabilized.png")
     client.generate(P.fill(P.GEN_EMPTY_SPACE_STABILIZED, space=space), refs, out)
     ID.register_scene_space(root, n, {
@@ -577,7 +631,9 @@ def stage_hero_composite(root, n, space, coords, client, prev_master=""):
 
     `prev_master` provides the incoming-scene context for cross-scene continuity.
     """
-    refs = list(ID.reference_images(root, n))
+    # Screenshot first (space ground truth), then character sheets + packshots.
+    src = os.path.join(ID.scene_dir(root, n), "source.png")
+    refs = [src] + list(ID.reference_images(root, n))
     coords_str = json.dumps(coords)
     prev_ctx = (f" Arriving from: {prev_master[:300]}.") if prev_master.strip() else ""
     prompt = P.fill(P.GEN_HERO_COMPOSITE, space=space, coords=coords_str) + prev_ctx

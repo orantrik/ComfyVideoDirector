@@ -150,22 +150,26 @@ def regen_element(root, meta, client):
     path = meta["path"]
     n = meta.get("scene")
 
+    src = os.path.join(ID.scene_dir(root, n), "source.png") if n else None
+
     if etype == "packshot":
         d = meta.get("desc") or ID.read_text(
             os.path.join(os.path.dirname(path), "desc.txt"), "")
         parts = [p.strip() for p in d.split("|")]
         name = parts[0] if parts else meta.get("item_id", "item")
         desc = parts[1] if len(parts) > 1 else ""
-        prompt = P.fill(P.GEN_PACKSHOT_4VIEW, desc=f"{name}, {desc}")
-        return client.generate(prompt, [], path)
+        loc = parts[2] if len(parts) > 2 else ""
+        prompt = P.fill(P.GEN_PACKSHOT_4VIEW, desc=f"{name}, {desc} ({loc})")
+        return client.generate(prompt, [src] if src else [], path)
 
     if etype == "space_map":
         space = _space_desc(root, n)
-        return client.generate(P.fill(P.GEN_SPACE_MAP, desc=space), [], path)
+        return client.generate(P.fill(P.GEN_SPACE_MAP, desc=space),
+                               [src] if src else [], path)
 
     if etype == "stabilized":
         space = _space_desc(root, n)
-        refs = ID.reference_images(root, n)
+        refs = ([src] if src else []) + ID.reference_images(root, n)
         return client.generate(P.fill(P.GEN_EMPTY_SPACE_STABILIZED, space=space),
                                refs, path)
 
@@ -177,7 +181,7 @@ def regen_element(root, meta, client):
         prev_ctx = (f" Arriving from: {prev[:300]}.") if prev.strip() else ""
         prompt = P.fill(P.GEN_HERO_COMPOSITE, space=space,
                         coords=json.dumps(coords)) + prev_ctx
-        refs = list(ID.reference_images(root, n))
+        refs = ([src] if src else []) + list(ID.reference_images(root, n))
         return client.generate(prompt, refs, path)
 
     if etype == "cast_sheet":
