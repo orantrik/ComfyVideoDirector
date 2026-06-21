@@ -16,8 +16,19 @@ def _post_json(url, payload):
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data,
                                  headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=60) as r:
-        return json.loads(r.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        try:
+            detail = json.loads(body)
+        except Exception:
+            detail = body
+        raise RuntimeError(
+            f"ComfyUI /prompt returned HTTP {e.code}.\n"
+            f"Detail: {json.dumps(detail, indent=2) if isinstance(detail, dict) else detail}"
+        ) from None
 
 
 def _get_json(url):
@@ -141,13 +152,7 @@ def run_recipe_video(comfy_url, recipe_api_json_path, patches, out_path, client_
     Unknown patch node IDs are silently skipped (warning only) to allow partial patching.
     """
     client_id = client_id or uuid.uuid4().hex
-    api = json.load(open(recipe_api_json_path, encoding="utf-8"))
-    for nid, inputs in (patches or {}).items():
-        if str(nid) not in api:
-            print(f"  [warn] patch targets unknown node {nid} in "
-                  f"{os.path.basename(recipe_api_json_path)} — skipping")
-            continue
-        api[str(nid)].setdefault("inputs", {}).update(inputs)
+    api = _load_recipe(recipe_api_json_path, patches, warn_missing=True)
     pid = queue(comfy_url, api, client_id)
     hist = wait(comfy_url, pid, timeout=timeout)
     items = collect_videos(hist, video_node=video_node)
@@ -157,6 +162,25 @@ def run_recipe_video(comfy_url, recipe_api_json_path, patches, out_path, client_
     if not items:
         raise RuntimeError(f"video recipe produced no output (prompt {pid})")
     return _download(comfy_url, items[0], out_path)
+
+
+def _load_recipe(path, patches, warn_missing=False):
+    """Load an API-format recipe JSON, strip comment keys (starting with '_'),
+    apply patches, and return the ready-to-queue dict."""
+    api = json.load(open(path, encoding="utf-8"))
+    # Strip documentation/comment keys so ComfyUI doesn't trip on them
+    api = {k: v for k, v in api.items() if not k.startswith("_")}
+    for nid, inputs in (patches or {}).items():
+        if str(nid) not in api:
+            msg = (f"  [warn] patch targets unknown node {nid} in "
+                   f"{os.path.basename(path)} — skipping")
+            if warn_missing:
+                print(msg)
+            else:
+                raise KeyError(f"recipe {os.path.basename(path)} has no node id {nid}")
+            continue
+        api[str(nid)].setdefault("inputs", {}).update(inputs)
+    return api
 
 
 def collect_images(history):
@@ -173,11 +197,7 @@ def run_recipe(comfy_url, recipe_api_json_path, patches, out_path, client_id=Non
     """Load an API-format recipe, apply patches, queue, save the FIRST output to
     out_path. `patches` = {node_id(str): {input_name: value}}."""
     client_id = client_id or uuid.uuid4().hex
-    api = json.load(open(recipe_api_json_path, encoding="utf-8"))
-    for nid, inputs in (patches or {}).items():
-        if str(nid) not in api:
-            raise KeyError(f"recipe {os.path.basename(recipe_api_json_path)} has no node id {nid}")
-        api[str(nid)].setdefault("inputs", {}).update(inputs)
+    api = _load_recipe(recipe_api_json_path, patches)
     pid = queue(comfy_url, api, client_id)
     hist = wait(comfy_url, pid, timeout=timeout)
     imgs = collect_images(hist)
@@ -190,11 +210,7 @@ def run_recipe_audio(comfy_url, recipe_api_json_path, patches, out_path, client_
                      timeout=600):
     """Run a TTS recipe whose output is AUDIO. Saves first audio output to out_path."""
     client_id = client_id or uuid.uuid4().hex
-    api = json.load(open(recipe_api_json_path, encoding="utf-8"))
-    for nid, inputs in (patches or {}).items():
-        if str(nid) not in api:
-            raise KeyError(f"recipe {os.path.basename(recipe_api_json_path)} has no node id {nid}")
-        api[str(nid)].setdefault("inputs", {}).update(inputs)
+    api = _load_recipe(recipe_api_json_path, patches)
     pid = queue(comfy_url, api, client_id)
     hist = wait(comfy_url, pid, timeout=timeout)
     items = collect_audio(hist)
@@ -208,9 +224,7 @@ def run_recipe_text(comfy_url, recipe_api_json_path, patches, client_id=None,
     """Run a recipe whose output is TEXT (e.g. Qwen3-VL). Returns the string from
     the node's history outputs."""
     client_id = client_id or uuid.uuid4().hex
-    api = json.load(open(recipe_api_json_path, encoding="utf-8"))
-    for nid, inputs in (patches or {}).items():
-        api[str(nid)].setdefault("inputs", {}).update(inputs)
+    api = _load_recipe(recipe_api_json_path, patches, warn_missing=True)
     pid = queue(comfy_url, api, client_id)
     hist = wait(comfy_url, pid, timeout=timeout)
     outs = hist.get("outputs", {}) or {}
