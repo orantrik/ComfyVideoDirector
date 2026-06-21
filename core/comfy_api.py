@@ -186,11 +186,20 @@ def collect_audio(history):
     return out
 
 
-def collect_videos(history, video_node=None):
-    """Collect video output items (SaveVideo / VHS_VideoCombine) from job history.
+_VIDEO_EXTS = (".mp4", ".webm", ".mkv", ".mov", ".avi", ".gif", ".m4v")
 
-    If video_node is given (e.g. '372'), only that node's outputs are returned.
-    Otherwise all nodes' video outputs are returned (first = earliest node).
+
+def collect_videos(history, video_node=None):
+    """Collect video output items from job history.
+
+    Handles three output shapes:
+      - VHS_VideoCombine            -> "gifs" / "videos"
+      - modern core SaveVideo node  -> "images" with "animated": true (the
+        PreviewVideo UI wraps the saved .mp4/.webm under the "images" key)
+    For the "images" key we only keep entries whose filename is a video file,
+    so we never mistake a still PNG preview for the video.
+
+    If video_node is given (e.g. '273'), only that node's outputs are returned.
     """
     out = []
     for node_id, data in (history.get("outputs", {}) or {}).items():
@@ -198,6 +207,11 @@ def collect_videos(history, video_node=None):
             continue
         for key in ("gifs", "videos"):
             for item in data.get(key, []) or []:
+                out.append(item)
+        # Core SaveVideo: video file is under "images".
+        for item in data.get("images", []) or []:
+            fn = (item.get("filename", "") if isinstance(item, dict) else "").lower()
+            if fn.endswith(_VIDEO_EXTS):
                 out.append(item)
     return out
 
