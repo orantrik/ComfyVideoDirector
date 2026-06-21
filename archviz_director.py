@@ -30,6 +30,27 @@ PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PKG_DIR)
 from core import identity as ID            # noqa: E402
 from core import prompts_archviz as P      # noqa: E402
+from core.asset_cache import AssetCache    # noqa: E402
+
+# Quality-gated reuse cache. Initialised in main(); a disabled stand-in is used
+# for direct imports / tests so the stages always have a CACHE to call.
+CACHE = AssetCache(os.getcwd(), enabled=False)
+
+
+def _ensure(root, out_path, kind, gen_fn, min_score=None):
+    """Generate out_path via gen_fn() unless a good existing asset can be reused.
+
+    This is the single choke point for credit-spending image generation: if the
+    asset already exists on disk and passes the quality gate, we skip the paid
+    call entirely and reuse it.
+    """
+    if CACHE.should_skip(out_path, kind=kind, min_score=min_score):
+        print(f"    [reuse] {os.path.relpath(out_path, root)} (passed quality gate)",
+              flush=True)
+        return out_path
+    gen_fn()
+    CACHE.record(out_path, kind=kind)
+    return out_path
 
 # 64x64 white PNG used as a placeholder asset in dry-run. A 1x1 image makes some
 # LoadImage builds crash inside PyAV, so we keep it comfortably sized + valid.
@@ -548,10 +569,11 @@ def stage_packshots(root, n, furniture, objects, client):
             ID.write_text(os.path.join(idir, "desc.txt"),
                           f"{it['name']} | {it['desc']} | {it['location']}")
             packshot = os.path.join(idir, "packshot_4view.png")
-            print(f"    packshot {made + 1}/{budget}: {it['name']}...", flush=True)
-            client.generate(P.fill(P.GEN_PACKSHOT_4VIEW,
-                                   desc=f"{it['name']}, {it['desc']} ({it['location']})"),
-                            [src], packshot)
+            _ensure(root, packshot, "packshot", lambda it=it, packshot=packshot: (
+                print(f"    packshot {made + 1}/{budget}: {it['name']}...", flush=True),
+                client.generate(P.fill(P.GEN_PACKSHOT_4VIEW,
+                                       desc=f"{it['name']}, {it['desc']} ({it['location']})"),
+                                [src], packshot)))
             ID.register_scene_item(root, n, kind, it["id"], {
                 "name": it["name"], "desc_path": os.path.join(idir, "desc.txt"),
                 "packshot": packshot, "location": it["location"]})
@@ -564,7 +586,8 @@ def stage_packshots(root, n, furniture, objects, client):
 def stage_space_map(root, n, space, client):
     src = os.path.join(ID.scene_dir(root, n), "source.png")
     out = os.path.join(ID.scene_dir(root, n), "identity", "space_map.png")
-    client.generate(P.fill(P.GEN_SPACE_MAP, desc=space), [src], out)
+    _ensure(root, out, "space_map",
+            lambda: client.generate(P.fill(P.GEN_SPACE_MAP, desc=space), [src], out))
     return out
 
 
@@ -574,7 +597,9 @@ def stage_stabilized_space(root, n, space, client):
     src = os.path.join(ID.scene_dir(root, n), "source.png")
     refs = [src] + ID.reference_images(root, n)  # screenshot first, then packshots
     out = os.path.join(ID.scene_dir(root, n), "renders", "empty_space_stabilized.png")
-    client.generate(P.fill(P.GEN_EMPTY_SPACE_STABILIZED, space=space), refs, out)
+    _ensure(root, out, "stabilized_space",
+            lambda: client.generate(P.fill(P.GEN_EMPTY_SPACE_STABILIZED, space=space),
+                                    refs, out))
     ID.register_scene_space(root, n, {
         "desc_path": os.path.join(ID.scene_dir(root, n), "identity", "space.json"),
         "space_map": os.path.join(ID.scene_dir(root, n), "identity", "space_map.png"),
@@ -591,14 +616,17 @@ def stage_cast(root, cast_spec, client):
         ID.write_text(os.path.join(sdir, "desc.txt"), sp["desc"])
         sheet = os.path.join(sdir, "sheet_7angle.png")
         portrait = os.path.join(sdir, "portrait.png")
-        print("  cast: spokesman character sheet...", flush=True)
-        client.generate(P.fill(P.GEN_CHARACTER_SHEET, n=7, desc=sp["desc"]), [], sheet)
-        print("  cast: spokesman portrait...", flush=True)
-        client.generate(P.fill(P.GEN_PORTRAIT, desc=sp["desc"]), [], portrait)
+        _ensure(root, sheet, "cast_sheet", lambda: (
+            print("  cast: spokesman character sheet...", flush=True),
+            client.generate(P.fill(P.GEN_CHARACTER_SHEET, n=7, desc=sp["desc"]), [], sheet)))
+        _ensure(root, portrait, "cast_portrait", lambda: (
+            print("  cast: spokesman portrait...", flush=True),
+            client.generate(P.fill(P.GEN_PORTRAIT, desc=sp["desc"]), [], portrait)))
         for i, garment in enumerate(sp.get("clothes", []), 1):
             cp = os.path.join(sdir, "clothes_packshots", f"garment_{i:02d}.png")
-            print(f"  cast: spokesman garment {i}...", flush=True)
-            client.generate(P.fill(P.GEN_CLOTHES_PACKSHOT, desc=garment), [], cp)
+            _ensure(root, cp, "cast_garment", lambda cp=cp, garment=garment: (
+                print(f"  cast: spokesman garment {i}...", flush=True),
+                client.generate(P.fill(P.GEN_CLOTHES_PACKSHOT, desc=garment), [], cp)))
         ID.register_cast(root, "spokesman", "spokesman",
                          {"desc_path": os.path.join(sdir, "desc.txt"),
                           "sheet": sheet, "portrait": portrait})
@@ -608,10 +636,13 @@ def stage_cast(root, cast_spec, client):
         ID.write_text(os.path.join(adir, "desc.txt"), actor["desc"])
         sheet = os.path.join(adir, "sheet.png")
         portrait = os.path.join(adir, "portrait.png")
-        print(f"  cast: actor {aid} sheet...", flush=True)
-        client.generate(P.fill(P.GEN_CHARACTER_SHEET, n=5, desc=actor["desc"]), [], sheet)
-        print(f"  cast: actor {aid} portrait...", flush=True)
-        client.generate(P.fill(P.GEN_PORTRAIT, desc=actor["desc"]), [], portrait)
+        _ensure(root, sheet, "cast_sheet", lambda aid=aid, actor=actor, sheet=sheet: (
+            print(f"  cast: actor {aid} sheet...", flush=True),
+            client.generate(P.fill(P.GEN_CHARACTER_SHEET, n=5, desc=actor["desc"]), [], sheet)))
+        _ensure(root, portrait, "cast_portrait",
+                lambda aid=aid, actor=actor, portrait=portrait: (
+            print(f"  cast: actor {aid} portrait...", flush=True),
+            client.generate(P.fill(P.GEN_PORTRAIT, desc=actor["desc"]), [], portrait)))
         ID.register_cast(root, "actors", aid,
                          {"desc_path": os.path.join(adir, "desc.txt"),
                           "sheet": sheet, "portrait": portrait})
@@ -833,8 +864,9 @@ def stage_hero_composite(root, n, space, coords, client, prev_master=""):
     count = max(1, int(LIMITS.get("hero_variations", 4)))
     for v in range(1, count + 1):
         out = os.path.join(ID.scene_dir(root, n), "renders", f"hero_v{v}.png")
-        print(f"    hero variation {v}/{count}...", flush=True)
-        client.generate(prompt, list(refs), out)   # fresh copy of refs each call
+        _ensure(root, out, "hero", lambda v=v, out=out: (
+            print(f"    hero variation {v}/{count}...", flush=True),
+            client.generate(prompt, list(refs), out)))   # fresh copy of refs each call
         variations.append(out)
     return variations
 
@@ -1009,7 +1041,15 @@ def run_scene(root, n, src, client, phases=(1, 2, 3, 4),
                                 {}).get("description", "")
         furniture, objects = parse_items(furn_raw), parse_items(obj_raw)
 
-    if 2 in phases:
+    # If a locked hero from a previous run already passed inspection, skip the
+    # whole expensive composite+reconcile+inspect block (and its master/coords).
+    scene_d = ID.scene_dir(root, n)
+    hero_skip = (2 in phases) and CACHE.hero_reusable(scene_d)
+    if hero_skip:
+        print("  [reuse] hero_locked.png already passed inspection "
+              "- skipping Stages G/I/J/K", flush=True)
+
+    if 2 in phases and not hero_skip:
         coords = stage_coordinates(root, n, src, client)
         print(f"  coordinates: {len(coords)} elements (Stage G)")
         master, _ = stage_master_prompt(root, n, furniture, objects, space, client,
@@ -1018,12 +1058,12 @@ def run_scene(root, n, src, client, phases=(1, 2, 3, 4),
               + (f" [with scene {n-1} context]" if prev_master else ""))
     else:
         master = ID.read_text(
-            os.path.join(ID.scene_dir(root, n), "prompts", "master_prompt.txt"), "")
+            os.path.join(scene_d, "prompts", "master_prompt.txt"), "")
 
     if 3 in phases:
         stage_audio(root, n, client, kokoro_voice=_kokoro_voice)
 
-    if 2 in phases:
+    if 2 in phases and not hero_skip:
         variations = stage_hero_composite(root, n, space, coords, client,
                                           prev_master=prev_master)
         print(f"  hero composite: {len(variations)} variations (Stage I)")
@@ -1210,6 +1250,16 @@ def main():
     ap.add_argument("--keep-clutter", action="store_true",
                     help="also packshot trivial site clutter (parking, planters, "
                          "distant plant...). Off by default to save credits.")
+    ap.add_argument("--no-reuse", action="store_true",
+                    help="regenerate everything; do NOT reuse existing good assets. "
+                         "By default, existing elements that pass the quality gate "
+                         "are reused to save credits.")
+    ap.add_argument("--reuse-min-score", type=int, default=70,
+                    help="min stored fit score (0-100) for an existing asset to be "
+                         "reused (default 70). Applies to scored assets/heroes.")
+    ap.add_argument("--rescore-existing", action="store_true",
+                    help="pay for a fresh vision fit-score when reusing assets that "
+                         "have no cached score (off by default).")
     ap.add_argument("--vision-backend", default="gemini", choices=["gemini", "qwen"],
                     help="vision analysis backend for Stages B/G/J/K. 'gemini' (default) "
                          "uses the Gemini API node (reliable, high quality). 'qwen' uses "
@@ -1259,6 +1309,18 @@ def main():
           f"inspect={LIMITS['inspect_mode']}  "
           f"hero_variations={LIMITS['hero_variations']}  "
           f"skip_clutter={LIMITS['skip_clutter']}")
+
+    # Quality-gated reuse: scan the project for existing elements and skip
+    # regenerating the ones that are already good (saves API credits on re-runs).
+    global CACHE
+    CACHE = AssetCache(args.project, enabled=not args.no_reuse,
+                       min_score=args.reuse_min_score, rescore=args.rescore_existing)
+    if not CACHE.enabled:
+        print("[reuse] disabled (--no-reuse): every element will be regenerated")
+    elif os.path.isdir(args.project):
+        CACHE.scan()
+    else:
+        print("[reuse] new project - nothing to reuse yet")
 
     ID.init_project(args.project)
     cast_spec = ID.read_json(args.cast, DEFAULT_CAST) if args.cast else DEFAULT_CAST
@@ -1318,6 +1380,8 @@ def main():
 
     print(f"\nDONE. Identity container at: {args.project}")
     print(f"Index: {ID.index_path(args.project)}")
+    if CACHE.enabled:
+        print(CACHE.summary())
 
 
 if __name__ == "__main__":

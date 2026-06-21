@@ -97,6 +97,7 @@ class App(tk.Tk):
         self.var_inspect = tk.StringVar(value="fast")
         self.var_maxpackshots = tk.StringVar(value="8")
         self.var_herovars = tk.StringVar(value="4")
+        self.var_reuse = tk.BooleanVar(value=True)
         self.var_dryrun = tk.BooleanVar(value=False)
         self.var_token = tk.StringVar()
         self.var_model = tk.StringVar(value="Nano Banana 2 (Gemini 3.1 Flash Image)")
@@ -206,6 +207,10 @@ class App(tk.Tk):
         tk.Label(cost, text="off = no QA scoring (cheapest) \u00b7 fast = 1 call/variation "
                             "\u00b7 full = 1 call/element (most $$)", fg="#888").grid(
             row=1, column=0, columnspan=6, sticky="w", pady=(2, 0))
+        ttk.Checkbutton(cost, text="Reuse existing good elements (scan & skip "
+                                   "regen \u2014 saves credits on re-runs)",
+                        variable=self.var_reuse).grid(
+            row=2, column=0, columnspan=6, sticky="w", pady=(4, 0))
 
         btns = tk.Frame(p)
         btns.pack(fill="x", padx=12, pady=6)
@@ -502,6 +507,7 @@ class App(tk.Tk):
             self.var_inspect.set(s.get("inspect", "fast"))
             self.var_maxpackshots.set(str(s.get("max_packshots", "8")))
             self.var_herovars.set(str(s.get("hero_variations", "4")))
+            self.var_reuse.set(bool(s.get("reuse", True)))
             self.var_token.set(s.get("token", ""))
             self.var_model.set(s.get("model", "Nano Banana 2 (Gemini 3.1 Flash Image)"))
         except Exception:
@@ -521,6 +527,7 @@ class App(tk.Tk):
                 "inspect": self.var_inspect.get(),
                 "max_packshots": self.var_maxpackshots.get(),
                 "hero_variations": self.var_herovars.get(),
+                "reuse": self.var_reuse.get(),
                 "token": self.var_token.get(),
                 "model": self.var_model.get(),
             }
@@ -552,6 +559,8 @@ class App(tk.Tk):
                 "--inspect-mode", self.var_inspect.get().strip() or "fast",
                 "--max-packshots", (self.var_maxpackshots.get().strip() or "8"),
                 "--hero-variations", (self.var_herovars.get().strip() or "4")]
+        if not self.var_reuse.get():
+            argv.append("--no-reuse")
         if self.var_model.get().strip():
             argv += ["--image-model", self.var_model.get().strip()]
         if self.var_token.get().strip():
