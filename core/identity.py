@@ -128,6 +128,30 @@ def register_cast(root, role, item_id, record):
 # --------------------------------------------------------------------------- #
 #  Item path helpers
 # --------------------------------------------------------------------------- #
+def voice_ref_path(root):
+    """Return the spokesman's reference voice clip path if it exists, else None.
+
+    Expected locations (first match wins):
+      cast/spokesman/voice_ref.wav   ← preferred (user drops their clip here)
+      cast/spokesman/voice_ref.mp3
+    """
+    for ext in (".wav", ".mp3", ".flac", ".ogg"):
+        p = os.path.join(cast_dir(root), "spokesman", f"voice_ref{ext}")
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def register_audio(root, n, voiceover_path):
+    """Register the scene voiceover path in the index."""
+    idx = load_index(root)
+    idx.setdefault("scenes", {}).setdefault(scene_id(n), {})["audio"] = {
+        "voiceover": voiceover_path
+    }
+    save_index(root, idx)
+    return voiceover_path
+
+
 def register_scene_space(root, n, record):
     """Register scene-level space data (space_map, stabilized image paths) in the index."""
     idx = load_index(root)

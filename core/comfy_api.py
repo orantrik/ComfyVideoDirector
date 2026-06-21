@@ -84,6 +84,38 @@ def _download(comfy_url, info, dest_path):
 import urllib.parse  # noqa: E402  (after functions, used by _download)
 
 
+def upload_audio(comfy_url, filepath, overwrite=True):
+    """POST /upload/audio as multipart; returns the stored name."""
+    boundary = "----aidir" + uuid.uuid4().hex
+    fname = os.path.basename(filepath)
+    with open(filepath, "rb") as fh:
+        filedata = fh.read()
+    body = b""
+    body += f"--{boundary}\r\n".encode()
+    body += f'Content-Disposition: form-data; name="audio"; filename="{fname}"\r\n'.encode()
+    body += b"Content-Type: application/octet-stream\r\n\r\n" + filedata + b"\r\n"
+    body += f"--{boundary}\r\n".encode()
+    body += b'Content-Disposition: form-data; name="overwrite"\r\n\r\n'
+    body += (b"true" if overwrite else b"false") + b"\r\n"
+    body += f"--{boundary}--\r\n".encode()
+    req = urllib.request.Request(comfy_url.rstrip("/") + "/upload/audio", data=body,
+                                 headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        info = json.loads(r.read().decode("utf-8"))
+    sub = info.get("subfolder", "")
+    name = info.get("name", fname)
+    return f"{sub}/{name}" if sub else name
+
+
+def collect_audio(history):
+    """Collect audio output items from a completed job history."""
+    out = []
+    for _node, data in (history.get("outputs", {}) or {}).items():
+        for item in data.get("audio", []) or []:
+            out.append(item)
+    return out
+
+
 def collect_images(history):
     out = []
     for _node, data in (history.get("outputs", {}) or {}).items():
@@ -109,6 +141,23 @@ def run_recipe(comfy_url, recipe_api_json_path, patches, out_path, client_id=Non
     if not imgs:
         raise RuntimeError(f"recipe produced no images (prompt {pid})")
     return _download(comfy_url, imgs[0], out_path)
+
+
+def run_recipe_audio(comfy_url, recipe_api_json_path, patches, out_path, client_id=None,
+                     timeout=600):
+    """Run a TTS recipe whose output is AUDIO. Saves first audio output to out_path."""
+    client_id = client_id or uuid.uuid4().hex
+    api = json.load(open(recipe_api_json_path, encoding="utf-8"))
+    for nid, inputs in (patches or {}).items():
+        if str(nid) not in api:
+            raise KeyError(f"recipe {os.path.basename(recipe_api_json_path)} has no node id {nid}")
+        api[str(nid)].setdefault("inputs", {}).update(inputs)
+    pid = queue(comfy_url, api, client_id)
+    hist = wait(comfy_url, pid, timeout=timeout)
+    items = collect_audio(hist)
+    if not items:
+        raise RuntimeError(f"TTS recipe produced no audio (prompt {pid})")
+    return _download(comfy_url, items[0], out_path)
 
 
 def run_recipe_text(comfy_url, recipe_api_json_path, patches, client_id=None,

@@ -22,6 +22,7 @@ import sys
 import glob
 import json
 import shutil
+import struct
 import base64
 import argparse
 
@@ -91,6 +92,21 @@ class DryRunClient:
             fh.write(_PLACEHOLDER_PNG)
         return out_path
 
+    def generate_audio(self, text, ref_audio_path, out_path, voice="af_heart"):
+        """Write a minimal silent WAV so the pipeline can exercise Stage H offline."""
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        # 44-byte WAV header + 4 bytes silence (2 samples, 16-bit, 22050 Hz, mono).
+        data = b"\x00\x00\x00\x00"
+        header = struct.pack("<4sI4s4sIHHIIHH4sI",
+                             b"RIFF", 36 + len(data), b"WAVE",
+                             b"fmt ", 16, 1, 1, 22050, 44100, 2, 16,
+                             b"data", len(data))
+        with open(out_path, "wb") as fh:
+            fh.write(header + data)
+        engine = "f5-tts" if ref_audio_path else "kokoro"
+        print(f"    [dry-run audio] {engine} -> {os.path.basename(out_path)}")
+        return out_path
+
 
 class ComfyClient:
     label = "comfyui"
@@ -102,10 +118,17 @@ class ComfyClient:
         self.recipes = recipes_dir
         # Expected recipe files + the node ids the controller patches.
         self.qwen_recipe = os.path.join(recipes_dir, "qwen_analyze.json")
-        self.nb_recipe = os.path.join(recipes_dir, "nanobanana_gen.json")
-        # These node-id maps must match the exported recipe graphs:
-        self.qwen_nodes = {"image": None, "user_prompt": None, "text_out": None}
-        self.nb_nodes = {"prompt": None, "image_1": None, "image_2": None, "save": None}
+        self.nb_recipe   = os.path.join(recipes_dir, "nanobanana_gen.json")
+        self.f5_recipe   = os.path.join(recipes_dir, "f5_tts.json")
+        self.kokoro_recipe = os.path.join(recipes_dir, "kokoro_tts.json")
+        # Node-id maps — must match the exported recipe graphs:
+        self.qwen_nodes   = {"image": None, "user_prompt": None, "text_out": None}
+        self.nb_nodes     = {"prompt": None, "image_1": None, "image_2": None, "save": None}
+        # F5-TTS: set node ids after exporting your graph in API format.
+        self.f5_nodes     = {"text": "2", "ref_audio": "1", "ref_text": None, "save": "3"}
+        # Kokoro TTS fallback: set node ids after exporting.
+        self.kokoro_nodes = {"text": "1", "voice": None, "save": "2"}
+        self.kokoro_voice = "af_heart"   # change to preferred Kokoro voice preset
 
     def analyze(self, user_prompt, image_path, system_prompt=""):
         up = self.api.upload_image(self.url, image_path)
@@ -126,6 +149,34 @@ class ComfyClient:
                 up = self.api.upload_image(self.url, ref_paths.pop(0))
                 patches[self.nb_nodes[slot]] = {"image": up}
         return self.api.run_recipe(self.url, self.nb_recipe, patches, out_path)
+
+    def generate_audio(self, text, ref_audio_path, out_path, voice=None):
+        """Generate voiceover via F5-TTS (with ref) or Kokoro TTS (fallback)."""
+        if ref_audio_path and os.path.isfile(ref_audio_path):
+            # F5-TTS path: upload ref audio, patch text, run.
+            up = self.api.upload_audio(self.url, ref_audio_path)
+            patches = {}
+            if self.f5_nodes.get("ref_audio"):
+                patches[self.f5_nodes["ref_audio"]] = {"audio": up}
+            if self.f5_nodes.get("text"):
+                patches[self.f5_nodes["text"]] = {"gen_text": text}
+            if self.f5_nodes.get("ref_text"):
+                patches[self.f5_nodes["ref_text"]] = {"ref_text": ""}
+            if self.f5_nodes.get("save"):
+                patches[self.f5_nodes["save"]] = {
+                    "filename_prefix": os.path.splitext(os.path.basename(out_path))[0]}
+            return self.api.run_recipe_audio(self.url, self.f5_recipe, patches, out_path)
+        else:
+            # Kokoro fallback: no ref audio needed.
+            patches = {}
+            if self.kokoro_nodes.get("text"):
+                patches[self.kokoro_nodes["text"]] = {"text": text}
+            if self.kokoro_nodes.get("voice"):
+                patches[self.kokoro_nodes["voice"]] = {"voice": voice or self.kokoro_voice}
+            if self.kokoro_nodes.get("save"):
+                patches[self.kokoro_nodes["save"]] = {
+                    "filename_prefix": os.path.splitext(os.path.basename(out_path))[0]}
+            return self.api.run_recipe_audio(self.url, self.kokoro_recipe, patches, out_path)
 
 
 # --------------------------------------------------------------------------- #
@@ -261,6 +312,31 @@ def stage_cast(root, cast_spec, client):
         ID.register_cast(root, "actors", aid,
                          {"desc_path": os.path.join(adir, "desc.txt"),
                           "sheet": sheet, "portrait": portrait})
+
+
+# --------------------------------------------------------------------------- #
+#  Stages — Phase 3: H (Audio)
+# --------------------------------------------------------------------------- #
+def stage_audio(root, n, client, kokoro_voice="af_heart"):
+    """Stage H: generate voiceover WAV for lip-sync.
+
+    Uses F5-TTS (voice cloning) if cast/spokesman/voice_ref.* exists,
+    otherwise falls back to Kokoro TTS with the given voice preset.
+    """
+    audio_prompt = ID.read_text(
+        os.path.join(ID.scene_dir(root, n), "prompts", "audio_prompt.txt"), "")
+    if not audio_prompt.strip():
+        # Fallback: use a trimmed master prompt if audio_prompt wasn't written yet.
+        audio_prompt = ID.read_text(
+            os.path.join(ID.scene_dir(root, n), "prompts", "master_prompt.txt"), "")[:300]
+
+    ref_audio = ID.voice_ref_path(root)   # None if no voice_ref clip is present
+    out_path   = os.path.join(ID.scene_dir(root, n), "audio", "voiceover.wav")
+    client.generate_audio(audio_prompt, ref_audio, out_path, voice=kokoro_voice)
+    ID.register_audio(root, n, out_path)
+    engine = "F5-TTS (voice clone)" if ref_audio else f"Kokoro TTS ({kokoro_voice})"
+    print(f"  voiceover done [{engine}] -> audio/voiceover.wav (Stage H)")
+    return out_path
 
 
 # --------------------------------------------------------------------------- #
@@ -405,9 +481,9 @@ def stage_lock_hero(root, n, variations, best_idx, report):
 
 
 # --------------------------------------------------------------------------- #
-#  Scene runner (phases 1 + 2 together)
+#  Scene runner (phases 1 + 2 + 3)
 # --------------------------------------------------------------------------- #
-def run_scene(root, n, src, client, phases=(1, 2)):
+def run_scene(root, n, src, client, phases=(1, 2, 3), _kokoro_voice="af_heart"):
     print(f"\n=== SCENE {n} ({client.label}) ===")
 
     if 1 in phases:
@@ -434,6 +510,11 @@ def run_scene(root, n, src, client, phases=(1, 2)):
         print(f"  coordinates: {len(coords)} elements (Stage G)")
         master, _ = stage_master_prompt(root, n, furniture, objects, space, client)
         print("  master prompt + audio prompt done (Stage G)")
+
+    if 3 in phases:
+        stage_audio(root, n, client, kokoro_voice=_kokoro_voice)
+
+    if 2 in phases:
         variations = stage_hero_composite(root, n, space, coords, client)
         print(f"  hero composite: {len(variations)} variations (Stage I)")
         stage_reconcile(root, n, furniture, objects, coords, client)
@@ -464,8 +545,11 @@ def main():
     ap.add_argument("--comfy-url", default="http://127.0.0.1:8001")
     ap.add_argument("--recipes", default="", help="dir of API-format recipe graphs")
     ap.add_argument("--dry-run", action="store_true", help="offline scaffold with placeholders")
-    ap.add_argument("--phases", default="1,2",
-                    help="comma-separated phases to run, e.g. '1' or '1,2' (default: 1,2)")
+    ap.add_argument("--phases", default="1,2,3",
+                    help="comma-separated phases to run, e.g. '1' or '1,2,3' (default: 1,2,3)")
+    ap.add_argument("--kokoro-voice", default="af_heart",
+                    help="Kokoro TTS voice preset used when no voice_ref clip is present "
+                         "(default: af_heart). See Kokoro docs for available voices.")
     args = ap.parse_args()
 
     phases = set(int(p.strip()) for p in args.phases.split(",") if p.strip())
@@ -495,7 +579,8 @@ def main():
         scene_nums = list(range(1, len(frames) + 1))
 
     for n, src in zip(scene_nums, frames):
-        run_scene(args.project, n, src, client, phases=phases)
+        run_scene(args.project, n, src, client, phases=phases,
+                  _kokoro_voice=args.kokoro_voice)
 
     print(f"\nDONE. Identity container at: {args.project}")
     print(f"Index: {ID.index_path(args.project)}")
