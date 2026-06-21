@@ -31,6 +31,9 @@ sys.path.insert(0, PKG_DIR)
 from core import identity as ID            # noqa: E402
 from core import prompts_archviz as P      # noqa: E402
 from core.asset_cache import AssetCache    # noqa: E402
+from core.token_meter import TokenMeter    # noqa: E402
+
+METER = TokenMeter()   # reset in main(); always available for stage functions
 
 # Quality-gated reuse cache. Initialised in main(); a disabled stand-in is used
 # for direct imports / tests so the stages always have a CACHE to call.
@@ -312,8 +315,10 @@ class ComfyClient:
             n["image"]:  {"image": up},
             n["gemini"]: gpatch,
         }
-        return self.api.run_recipe_text(self.url, self.gemini_analyze_recipe, patches,
-                                        text_node=n["text_out"], extra_data=self._extra())
+        result = self.api.run_recipe_text(self.url, self.gemini_analyze_recipe, patches,
+                                          text_node=n["text_out"], extra_data=self._extra())
+        METER.add_analyze(user_prompt, result)
+        return result
 
     MAX_REFS = 14   # GeminiNanoBanana2V2 accepts up to 14 reference images
 
@@ -374,7 +379,9 @@ class ComfyClient:
             if attempt == attempts:
                 n3["response_modalities"] = "IMAGE+TEXT"
             try:
-                return self.api.run_graph(self.url, g, out_path, extra_data=self._extra())
+                result = self.api.run_graph(self.url, g, out_path, extra_data=self._extra())
+                METER.add_image()
+                return result
             except RuntimeError as e:
                 if "did not generate an image" in str(e) and attempt < attempts:
                     last_err = e
@@ -407,8 +414,10 @@ class ComfyClient:
                 self.f5_nodes["text"]:      {"speech": text, "sample_text": ref_text},
                 self.f5_nodes["save"]:      {"filename_prefix": prefix},
             }
-            return self.api.run_recipe_audio(self.url, self.f5_recipe, patches, out_path,
-                                             extra_data=self._extra())
+            result = self.api.run_recipe_audio(self.url, self.f5_recipe, patches, out_path,
+                                              extra_data=self._extra())
+            METER.add_tts()
+            return result
         else:
             # Kokoro: just text + voice preset.
             patches = {
@@ -416,8 +425,10 @@ class ComfyClient:
                 self.kokoro_nodes["text_node"]:  {"text": text},
                 self.kokoro_nodes["save"]:       {"filename_prefix": prefix},
             }
-            return self.api.run_recipe_audio(self.url, self.kokoro_recipe, patches, out_path,
-                                             extra_data=self._extra())
+            result = self.api.run_recipe_audio(self.url, self.kokoro_recipe, patches, out_path,
+                                               extra_data=self._extra())
+            METER.add_tts()
+            return result
 
     def generate_director_video(self, frames_folder, segment_index, out_dir):
         """Stage M (director mode): queue ClaudeVideoGen_AIDirector workflow for one segment.
@@ -1078,6 +1089,7 @@ def run_scene(root, n, src, client, phases=(1, 2, 3, 4),
     if 4 in phases:
         stage_video(root, n, client, director_frames=director_frames)
 
+    print(METER.log_line(), flush=True)
     return {"furniture": furniture, "objects": objects, "space": space,
             "master": master}
 
@@ -1322,6 +1334,12 @@ def main():
     else:
         print("[reuse] new project - nothing to reuse yet")
 
+    # Reset and configure the token/cost meter for this run.
+    global METER
+    METER = TokenMeter()
+    METER.set_vision_model(args.vision_model or "gemini-3-1-pro")
+    METER.set_image_model(getattr(args, "image_model", ""))
+
     ID.init_project(args.project)
     cast_spec = ID.read_json(args.cast, DEFAULT_CAST) if args.cast else DEFAULT_CAST
 
@@ -1382,6 +1400,7 @@ def main():
     print(f"Index: {ID.index_path(args.project)}")
     if CACHE.enabled:
         print(CACHE.summary())
+    print(METER.summary())
 
 
 if __name__ == "__main__":

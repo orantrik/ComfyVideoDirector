@@ -226,8 +226,20 @@ class App(tk.Tk):
                   fg="white", relief="flat", padx=12, pady=8, cursor="hand2").pack(
             side="right")
 
+        # Token / cost status bar — updates live from [tokens] lines in the log.
+        self.var_cost = tk.StringVar(value="Tokens: —  /  Cost: —")
+        cost_bar = tk.Frame(p, bg="#0d1117", pady=4)
+        cost_bar.pack(fill="x", padx=12)
+        tk.Label(cost_bar, text="  Session cost:", bg="#0d1117",
+                 fg="#8b949e", font=("Consolas", 9)).pack(side="left")
+        self.lbl_cost = tk.Label(cost_bar, textvariable=self.var_cost, bg="#0d1117",
+                                 fg="#f0a500", font=("Consolas", 9, "bold"))
+        self.lbl_cost.pack(side="left", padx=(4, 0))
+        tk.Label(cost_bar, text="  (estimates — Gemini 3.1 Pro vision + NanoBanana images)",
+                 bg="#0d1117", fg="#444d56", font=("Consolas", 8)).pack(side="left", padx=6)
+
         logf = ttk.LabelFrame(p, text="  Live pipeline log  ", padding=4)
-        logf.pack(fill="both", expand=True, padx=12, pady=(4, 10))
+        logf.pack(fill="both", expand=True, padx=12, pady=(2, 10))
         self.log = scrolledtext.ScrolledText(logf, bg="#0d1117", fg="#c9d1d9",
                                              font=("Consolas", 9), wrap="word")
         self.log.pack(fill="both", expand=True)
@@ -585,6 +597,7 @@ class App(tk.Tk):
         if argv is None:
             return
         self._save_settings()
+        self.var_cost.set("Tokens: —  /  Cost: —")
         self._log("[info] Starting pipeline\u2026\n", "info")
         self._log(" ".join(f'"{a}"' if " " in a else a for a in argv) + "\n", "info")
         self._log("\u2500" * 60 + "\n")
@@ -608,8 +621,12 @@ class App(tk.Tk):
                 pass
 
         def emit(s):
+            # Parse running token / cost summary and update the status bar.
+            if s.startswith("[tokens]"):
+                self.after(0, self._update_cost_bar, s)
             tag = ("err" if any(w in s.lower() for w in ("error", "traceback", "failed"))
                    else "ok" if any(w in s for w in ("DONE", "done", "PASS"))
+                   else "info" if s.startswith("[tokens]")
                    else "")
             self.after(0, self._log, s, tag)
 
@@ -643,6 +660,22 @@ class App(tk.Tk):
     def _log(self, text, tag=""):
         self.log.insert("end", text, tag)
         self.log.see("end")
+
+    def _update_cost_bar(self, tokens_line):
+        """Parse a [tokens] log line and refresh the cost status bar."""
+        import re
+        # Line format:
+        # [tokens] in=X,XXX  out=XXX  imgs=N  tts=N  |  ~X,XXX tokens  /  ~$Y.YYYY
+        m_tok = re.search(r"~([\d,]+)\s+tokens", tokens_line)
+        m_dol = re.search(r"~\$([\d.]+)", tokens_line)
+        m_img = re.search(r"imgs=(\d+)", tokens_line)
+        if m_tok and m_dol:
+            tok = m_tok.group(1)
+            dol = float(m_dol.group(1))
+            img = m_img.group(1) if m_img else "?"
+            self.var_cost.set(
+                f"~{tok} tokens / ~${dol:.4f}   [{img} images]"
+            )
 
 
 if __name__ == "__main__":

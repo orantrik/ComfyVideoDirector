@@ -435,28 +435,6 @@
       "sigmas": "0.909375, 0.725, 0.421875, 0.0"
     }
   },
-  "327": {
-    "class_type": "ClownOptions_SDE_Beta",
-    "inputs": {
-      "noise_type_sde": "gaussian",
-      "noise_type_sde_substep": "gaussian",
-      "noise_mode_sde": "hard",
-      "noise_mode_sde_substep": "hard",
-      "eta": 0.5,
-      "eta_substep": 0.5,
-      "seed": 41075014842558
-    }
-  },
-  "325": {
-    "class_type": "ClownSampler_Beta",
-    "inputs": {
-      "options": ["327", 0],
-      "eta": 0.5,
-      "sampler_name": "linear/euler",
-      "seed": 427595108744566,
-      "bongmath": true
-    }
-  },
   "282": {
     "class_type": "CFGGuider",
     "inputs": {
@@ -471,7 +449,7 @@
     "inputs": {
       "noise": ["274", 0],
       "guider": ["282", 0],
-      "sampler": ["325", 0],
+      "sampler": ["291", 0],
       "sigmas": ["280", 0],
       "latent_image": ["276", 0]
     }
