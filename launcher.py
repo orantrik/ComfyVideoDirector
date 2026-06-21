@@ -98,6 +98,8 @@ class App(tk.Tk):
         self.var_maxpackshots = tk.StringVar(value="8")
         self.var_herovars = tk.StringVar(value="4")
         self.var_reuse = tk.BooleanVar(value=True)
+        self.var_photoreal = tk.BooleanVar(value=True)
+        self.var_herores = tk.StringVar(value="2K")
         self.var_dryrun = tk.BooleanVar(value=False)
         self.var_token = tk.StringVar()
         self.var_model = tk.StringVar(value="Nano Banana 2 (Gemini 3.1 Flash Image)")
@@ -211,6 +213,14 @@ class App(tk.Tk):
                                    "regen \u2014 saves credits on re-runs)",
                         variable=self.var_reuse).grid(
             row=2, column=0, columnspan=6, sticky="w", pady=(4, 0))
+        ttk.Checkbutton(cost, text="Ultra-photoreal locked image (Nano Banana Pro "
+                                   "+ realism inspector)",
+                        variable=self.var_photoreal).grid(
+            row=3, column=0, columnspan=4, sticky="w", pady=(2, 0))
+        tk.Label(cost, text="Hero res:").grid(row=3, column=4, sticky="e")
+        ttk.Combobox(cost, textvariable=self.var_herores, width=5,
+                     values=["1K", "2K", "4K"], state="readonly").grid(
+            row=3, column=5, sticky="w", padx=4)
 
         btns = tk.Frame(p)
         btns.pack(fill="x", padx=12, pady=6)
@@ -520,6 +530,8 @@ class App(tk.Tk):
             self.var_maxpackshots.set(str(s.get("max_packshots", "8")))
             self.var_herovars.set(str(s.get("hero_variations", "4")))
             self.var_reuse.set(bool(s.get("reuse", True)))
+            self.var_photoreal.set(bool(s.get("photoreal", True)))
+            self.var_herores.set(s.get("hero_resolution", "2K"))
             self.var_token.set(s.get("token", ""))
             self.var_model.set(s.get("model", "Nano Banana 2 (Gemini 3.1 Flash Image)"))
         except Exception:
@@ -540,6 +552,8 @@ class App(tk.Tk):
                 "max_packshots": self.var_maxpackshots.get(),
                 "hero_variations": self.var_herovars.get(),
                 "reuse": self.var_reuse.get(),
+                "photoreal": self.var_photoreal.get(),
+                "hero_resolution": self.var_herores.get(),
                 "token": self.var_token.get(),
                 "model": self.var_model.get(),
             }
@@ -573,6 +587,9 @@ class App(tk.Tk):
                 "--hero-variations", (self.var_herovars.get().strip() or "4")]
         if not self.var_reuse.get():
             argv.append("--no-reuse")
+        argv += ["--hero-resolution", self.var_herores.get().strip() or "2K"]
+        if not self.var_photoreal.get():
+            argv.append("--no-photoreal")
         if self.var_model.get().strip():
             argv += ["--image-model", self.var_model.get().strip()]
         if self.var_token.get().strip():
@@ -597,7 +614,8 @@ class App(tk.Tk):
         if argv is None:
             return
         self._save_settings()
-        self.var_cost.set("Tokens: —  /  Cost: —")
+        self.var_cost.set("Tokens: —  /  Cost: —  (starting…)")
+        self._poll_cost()   # live cost meter while the pipeline runs
         self._log("[info] Starting pipeline\u2026\n", "info")
         self._log(" ".join(f'"{a}"' if " " in a else a for a in argv) + "\n", "info")
         self._log("\u2500" * 60 + "\n")
@@ -660,6 +678,27 @@ class App(tk.Tk):
     def _log(self, text, tag=""):
         self.log.insert("end", text, tag)
         self.log.see("end")
+
+    def _poll_cost(self):
+        """Read the live token meter directly from the in-process pipeline module.
+
+        Robust against mid-run crashes (the per-scene [tokens] log line may never
+        print if a later stage fails), because it reads the accumulating METER
+        object in memory rather than relying on parsing log output.
+        """
+        meter = getattr(_PIPELINE_MOD, "METER", None) if _PIPELINE_MOD else None
+        if meter is not None:
+            try:
+                tok = meter.total_tokens()
+                dol = meter.total_cost()
+                imgs = meter.image_calls + getattr(meter, "pro_image_calls", 0)
+                pro = getattr(meter, "pro_image_calls", 0)
+                suffix = f"  [{imgs} imgs" + (f", {pro} pro]" if pro else "]")
+                self.var_cost.set(f"~{tok:,} tokens  /  ~${dol:.4f}{suffix}")
+            except Exception:
+                pass
+        if self._running:
+            self.after(700, self._poll_cost)
 
     def _update_cost_bar(self, tokens_line):
         """Parse a [tokens] log line and refresh the cost status bar."""

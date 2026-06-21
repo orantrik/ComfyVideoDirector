@@ -44,6 +44,14 @@ IMAGE_PRICING = {
     "default":          0.075,
 }
 
+# Nano Banana Pro (gemini-3-pro-image) priced by output resolution.
+PRO_IMAGE_PRICING = {
+    "1k": 0.134,
+    "2k": 0.134,
+    "4k": 0.240,
+    "default": 0.134,
+}
+
 # Tokens charged per image uploaded to a Gemini vision call (MEDIUM resolution,
 # Gemini 3 series).  Gemini 3 MEDIUM = 560 tokens/image.
 IMAGE_INPUT_TOKENS = 560
@@ -58,10 +66,12 @@ class TokenMeter:
     def reset(self):
         self.input_tokens  = 0
         self.output_tokens = 0
-        self.image_calls   = 0      # NanoBanana / image-gen credits
+        self.image_calls   = 0      # NanoBanana Flash / image-gen credits
+        self.pro_image_calls = 0    # Nano Banana Pro (gemini-3-pro-image) credits
         self.tts_calls     = 0      # Kokoro/F5 are local — counted for info only
         self._vision_model = "gemini-3-1-pro"
         self._image_model  = "Nano Banana 2 (Gemini 3.1 Flash Image)"
+        self._pro_res      = "2k"
 
     # -- configuration ------------------------------------------------------- #
 
@@ -71,6 +81,9 @@ class TokenMeter:
     def set_image_model(self, model_name: str):
         self._image_model = (model_name or "").strip()
 
+    def set_pro_resolution(self, resolution: str):
+        self._pro_res = (resolution or "2k").strip().lower()
+
     # -- recording ----------------------------------------------------------- #
 
     def add_analyze(self, prompt_text: str, response_text: str):
@@ -79,9 +92,12 @@ class TokenMeter:
         self.input_tokens  += max(1, len(prompt_text or "")  // 4) + IMAGE_INPUT_TOKENS
         self.output_tokens += max(1, len(response_text or "") // 4)
 
-    def add_image(self):
-        """Record one NanoBanana image-generation credit."""
-        self.image_calls += 1
+    def add_image(self, pro=False):
+        """Record one image-generation credit (Flash by default, or Pro)."""
+        if pro:
+            self.pro_image_calls += 1
+        else:
+            self.image_calls += 1
 
     def add_tts(self):
         """Record one TTS call (Kokoro / F5 — local, no cost)."""
@@ -107,8 +123,12 @@ class TokenMeter:
         in_rate, out_rate = self._vision_rates()
         return (self.input_tokens * in_rate + self.output_tokens * out_rate) / 1_000_000
 
+    def _pro_rate(self) -> float:
+        return PRO_IMAGE_PRICING.get(self._pro_res, PRO_IMAGE_PRICING["default"])
+
     def image_cost(self) -> float:
-        return self.image_calls * self._image_rate()
+        return (self.image_calls * self._image_rate()
+                + self.pro_image_calls * self._pro_rate())
 
     def total_cost(self) -> float:
         return self.vision_cost() + self.image_cost()
@@ -123,7 +143,8 @@ class TokenMeter:
         return (
             f"[tokens] "
             f"in={self.input_tokens:,}  out={self.output_tokens:,}  "
-            f"imgs={self.image_calls}  tts={self.tts_calls}  |  "
+            f"imgs={self.image_calls}  pro={self.pro_image_calls}  "
+            f"tts={self.tts_calls}  |  "
             f"~{self.total_tokens():,} tokens  /  ~${self.total_cost():.4f}"
         )
 
@@ -131,13 +152,18 @@ class TokenMeter:
         """Multi-line end-of-run summary."""
         in_r, out_r = self._vision_rates()
         ir = self._image_rate()
+        pr = self._pro_rate()
+        flash_cost = self.image_calls * ir
+        pro_cost = self.pro_image_calls * pr
         return (
             f"[cost summary]\n"
-            f"  Vision  : {self.input_tokens:,} input + {self.output_tokens:,} output tokens"
+            f"  Vision   : {self.input_tokens:,} input + {self.output_tokens:,} output tokens"
             f"  (${self.vision_cost():.4f})  [${in_r}/1M in  ${out_r}/1M out]\n"
-            f"  Images  : {self.image_calls} x ${ir:.3f} = ${self.image_cost():.4f}\n"
-            f"  TTS     : {self.tts_calls} calls (local, free)\n"
-            f"  TOTAL   : ~${self.total_cost():.4f} USD (estimates only)"
+            f"  Images   : {self.image_calls} Flash x ${ir:.3f} = ${flash_cost:.4f}\n"
+            f"  Pro imgs : {self.pro_image_calls} Pro({self._pro_res.upper()}) "
+            f"x ${pr:.3f} = ${pro_cost:.4f}\n"
+            f"  TTS      : {self.tts_calls} calls (local, free)\n"
+            f"  TOTAL    : ~${self.total_cost():.4f} USD (estimates only)"
         )
 
 

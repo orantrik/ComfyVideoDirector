@@ -80,6 +80,11 @@ LIMITS = {
     "inspect_mode":    "fast",
     "hero_variations": 4,
     "skip_clutter":    True,
+    # Stage P: ultra-photoreal locked image via Nano Banana Pro.
+    "photoreal":          True,
+    "hero_resolution":    "2K",   # 1K | 2K | 4K
+    "photoreal_min":      85,     # realism score (0-100) required to stop
+    "photoreal_attempts": 2,      # max Pro re-renders per scene
 }
 
 # Names/keywords that aren't worth a dedicated identity packshot (exterior clutter).
@@ -160,6 +165,9 @@ class DryRunClient:
                 {"id": "spokesman", "label": "spokesman", "kind": "person",  "x": 0.40, "y": 0.50, "area": "lounge"},
                 {"id": "a01",       "label": "actor a01", "kind": "person",  "x": 0.65, "y": 0.55, "area": "lounge"},
             ])
+        if "photorealism judge" in user_prompt or "indistinguishable from a REAL" in user_prompt:
+            # Stage P realism inspector — pass on the first try in dry-run.
+            return json.dumps({"score": 92, "problems": []})
         if "QA inspector" in user_prompt or "Compare the GENERATED" in user_prompt:
             # Stage K inspector — extract the label from the prompt.
             m = re.search(r"for '([^']+)'", user_prompt)
@@ -186,6 +194,10 @@ class DryRunClient:
         with open(out_path, "wb") as fh:
             fh.write(_PLACEHOLDER_PNG)
         return out_path
+
+    def generate_pro(self, prompt, ref_paths, out_path, resolution="2K",
+                     aspect="16:9", attempts=3):
+        return self.generate(prompt, ref_paths, out_path)
 
     def generate_audio(self, text, ref_audio_path, out_path, voice="af_heart"):
         """Write a minimal silent WAV so the pipeline can exercise Stage H offline."""
@@ -258,6 +270,9 @@ class ComfyClient:
         #   image_model -> patched into the GeminiNanoBanana2V2 'model' input.
         self.api_token   = ""
         self.image_model = "Nano Banana 2 (Gemini 3.1 Flash Image)"
+        # Ultra-photoreal locked-image model (GeminiImage2Node). gemini-3-pro-image
+        # = "Nano Banana Pro": slower + pricier, used only for the final hero.
+        self.hero_model  = "gemini-3-pro-image-preview"
         # Qwen model paths — set from CLI or defaults from ClaudeImageGen.json workflow
         _llm = r"C:\Users\oranbenshaprut\Documents\ComfyUI\models\LLM"
         self.qwen_model_path  = os.path.join(_llm, "Qwen3VL-8B-Instruct-Q8_0.gguf")
@@ -386,6 +401,86 @@ class ComfyClient:
                 if "did not generate an image" in str(e) and attempt < attempts:
                     last_err = e
                     print(f"    [retry {attempt}/{attempts}] Gemini returned no image; "
+                          f"retrying with a new seed\u2026")
+                    continue
+                raise
+        raise last_err
+
+    def generate_pro(self, prompt, ref_paths, out_path, resolution="2K",
+                     aspect="16:9", attempts=3):
+        """Ultra-photorealistic generation via GeminiImage2Node ("Nano Banana Pro",
+        model gemini-3-pro-image-preview).
+
+        Unlike GeminiNanoBanana2V2 (separate image_1..N slots), this node takes a
+        single batched IMAGE input, so references are chained through ImageBatch
+        nodes into one batch. Used for the final locked hero image per scene.
+        """
+        import copy as _copy
+        import random as _rng
+
+        refs = [r for r in (ref_paths or []) if _usable_ref(r)][:self.MAX_REFS]
+
+        base = {}
+        load_ids = []
+        nid = 100
+        for r in refs:
+            up = self.api.upload_image(self.url, r)
+            base[str(nid)] = {"class_type": "LoadImage",
+                              "inputs": {"image": up, "upload": "image"}}
+            load_ids.append(str(nid)); nid += 1
+
+        # Chain ImageBatch nodes to merge all references into one IMAGE batch.
+        images_src = None
+        if len(load_ids) == 1:
+            images_src = [load_ids[0], 0]
+        elif len(load_ids) >= 2:
+            bid = 200
+            cur = [load_ids[0], 0]
+            for lid in load_ids[1:]:
+                base[str(bid)] = {"class_type": "ImageBatch",
+                                  "inputs": {"image1": cur, "image2": [lid, 0]}}
+                cur = [str(bid), 0]; bid += 1
+            images_src = cur
+
+        gnode = {
+            "class_type": "GeminiImage2Node",
+            "inputs": {
+                "prompt": prompt,
+                "model": self.hero_model,
+                "seed": 42,
+                "aspect_ratio": aspect,
+                "resolution": resolution,
+                "response_modalities": "IMAGE",
+                "system_prompt": (
+                    "You are a world-class architectural photographer and a "
+                    "hyper-photorealistic image generator. The output must be "
+                    "indistinguishable from a real high-end DSLR photograph: "
+                    "physically correct lighting, shadows and reflections, real "
+                    "materials, accurate human anatomy and scale, realistic skin, "
+                    "fabric, foliage, vehicles and roads, and natural depth of field. "
+                    "Absolutely no CGI, 3D-render, illustration or videogame look."),
+            },
+        }
+        if images_src:
+            gnode["inputs"]["images"] = images_src
+        base["3"] = gnode
+        base["4"] = {"class_type": "SaveImage",
+                     "inputs": {"images": ["3", 0], "filename_prefix": "archviz_pro"}}
+
+        last_err = None
+        for attempt in range(1, attempts + 1):
+            g = _copy.deepcopy(base)
+            g["3"]["inputs"]["seed"] = _rng.randint(0, 2 ** 31)
+            if attempt == attempts:
+                g["3"]["inputs"]["response_modalities"] = "IMAGE+TEXT"
+            try:
+                result = self.api.run_graph(self.url, g, out_path, extra_data=self._extra())
+                METER.add_image(pro=True)
+                return result
+            except RuntimeError as e:
+                if "no image" in str(e).lower() and attempt < attempts:
+                    last_err = e
+                    print(f"    [retry {attempt}/{attempts}] Pro returned no image; "
                           f"retrying with a new seed\u2026")
                     continue
                 raise
@@ -1026,6 +1121,70 @@ def stage_lock_hero(root, n, variations, best_idx, report):
     return locked
 
 
+def stage_photoreal_finish(root, n, client, attempts=2, min_score=85, resolution="2K"):
+    """Stage P: re-render the locked hero with Nano Banana Pro for maximum realism.
+
+    Takes the locked composition (identity + layout already correct) and renders an
+    ultra-photorealistic version with gemini-3-pro-image. A realism inspector scores
+    the result and, if it falls short, regenerates with the inspector's feedback
+    appended (up to `attempts` tries). The best result overwrites hero_locked.png.
+    """
+    scene_d = ID.scene_dir(root, n)
+    locked = os.path.join(scene_d, "renders", "hero_locked.png")
+    if not os.path.isfile(locked):
+        print("  [photoreal] no locked hero yet - skipping Stage P")
+        return None
+
+    final = os.path.join(scene_d, "renders", "hero_photoreal.png")
+    # Reuse a previously-approved photoreal render if it's still good.
+    if CACHE.should_skip(final, kind="hero_pro"):
+        print(f"    [reuse] {os.path.relpath(final, root)} (passed quality gate)", flush=True)
+        shutil.copyfile(final, locked)
+        return final
+
+    src = os.path.join(scene_d, "source.png")
+    space = ID.read_json(os.path.join(scene_d, "identity", "space.json"),
+                         {}).get("description", "")
+    # Locked composition first (the photo to upgrade), then ground truth + identity refs.
+    refs = [locked, src] + list(ID.reference_images(root, n))
+    tmp = os.path.join(scene_d, "renders", "_photoreal_try.png")
+    feedback = ""
+    best_score = -1
+    for attempt in range(1, max(1, attempts) + 1):
+        print(f"    photoreal finish (Nano Banana Pro {resolution}) "
+              f"attempt {attempt}/{attempts}...", flush=True)
+        prompt = P.fill(P.GEN_PHOTOREAL_HERO, space=space) + feedback
+        client.generate_pro(prompt, refs, tmp, resolution=resolution)
+        raw = client.analyze(P.REALISM_INSPECTOR, tmp)
+        try:
+            parsed = json.loads(raw)
+            score = int(parsed.get("score", 0))
+            problems = parsed.get("problems", [])
+        except (json.JSONDecodeError, TypeError, ValueError):
+            m = re.search(r'"score"\s*:\s*(\d+)', raw or "")
+            score = int(m.group(1)) if m else 0
+            problems = []
+        print(f"      realism score: {score}%", flush=True)
+        if score > best_score:
+            best_score = score
+            shutil.copyfile(tmp, final)
+        if score >= min_score:
+            break
+        if problems:
+            feedback = ("\n\nFIX THESE PHOTOREALISM PROBLEMS FROM THE PREVIOUS "
+                        "ATTEMPT: " + "; ".join(str(p) for p in problems))
+
+    if os.path.isfile(final):
+        shutil.copyfile(final, locked)   # the locked hero is now the photoreal one
+        CACHE.record(final, kind="hero_pro", score=best_score)
+        print(f"  hero_locked.png upgraded -> photoreal [realism {best_score}%] (Stage P)")
+    try:
+        os.remove(tmp)
+    except OSError:
+        pass
+    return final
+
+
 # --------------------------------------------------------------------------- #
 #  Scene runner (phases 1–4)
 # --------------------------------------------------------------------------- #
@@ -1085,6 +1244,14 @@ def run_scene(root, n, src, client, phases=(1, 2, 3, 4),
         gate = "PASS" if vr["passes_gate"] else f"best={vr['average']:.0f}%"
         print(f"  inspector done [{gate}] (Stage K)")
         stage_lock_hero(root, n, variations, best_idx, report)
+
+    # Stage P: photoreal finish on the locked hero (runs for fresh or reused heroes).
+    if 2 in phases and LIMITS.get("photoreal", True):
+        stage_photoreal_finish(
+            root, n, client,
+            attempts=LIMITS.get("photoreal_attempts", 2),
+            min_score=LIMITS.get("photoreal_min", 85),
+            resolution=LIMITS.get("hero_resolution", "2K"))
 
     if 4 in phases:
         stage_video(root, n, client, director_frames=director_frames)
@@ -1262,6 +1429,22 @@ def main():
     ap.add_argument("--keep-clutter", action="store_true",
                     help="also packshot trivial site clutter (parking, planters, "
                          "distant plant...). Off by default to save credits.")
+    # --- Ultra-photoreal locked image (Nano Banana Pro) ---
+    ap.add_argument("--no-photoreal", action="store_true",
+                    help="skip the Nano Banana Pro photoreal finish on the locked "
+                         "hero image (Stage P). On by default.")
+    ap.add_argument("--hero-resolution", default="2K", choices=["1K", "2K", "4K"],
+                    help="output resolution for the Pro photoreal locked image "
+                         "(default 2K; 4K costs more credits).")
+    ap.add_argument("--hero-model", default="gemini-3-pro-image-preview",
+                    help="image model for the locked hero (default Nano Banana Pro "
+                         "= gemini-3-pro-image-preview).")
+    ap.add_argument("--photoreal-min", type=int, default=85,
+                    help="realism score 0-100 the locked image must reach before the "
+                         "photoreal loop stops (default 85).")
+    ap.add_argument("--photoreal-attempts", type=int, default=2,
+                    help="max Nano Banana Pro re-renders per scene to hit the realism "
+                         "target (default 2).")
     ap.add_argument("--no-reuse", action="store_true",
                     help="regenerate everything; do NOT reuse existing good assets. "
                          "By default, existing elements that pass the quality gate "
@@ -1317,10 +1500,17 @@ def main():
     LIMITS["inspect_mode"]    = args.inspect_mode
     LIMITS["hero_variations"] = max(1, args.hero_variations)
     LIMITS["skip_clutter"]    = not args.keep_clutter
+    LIMITS["photoreal"]          = not args.no_photoreal
+    LIMITS["hero_resolution"]    = args.hero_resolution
+    LIMITS["photoreal_min"]      = args.photoreal_min
+    LIMITS["photoreal_attempts"] = args.photoreal_attempts
     print(f"[cost] max_packshots={LIMITS['max_packshots']}  "
           f"inspect={LIMITS['inspect_mode']}  "
           f"hero_variations={LIMITS['hero_variations']}  "
           f"skip_clutter={LIMITS['skip_clutter']}")
+    print(f"[photoreal] {'ON' if LIMITS['photoreal'] else 'OFF'}  "
+          f"model={args.hero_model}  res={LIMITS['hero_resolution']}  "
+          f"target={LIMITS['photoreal_min']}%  attempts={LIMITS['photoreal_attempts']}")
 
     # Quality-gated reuse: scan the project for existing elements and skip
     # regenerating the ones that are already good (saves API credits on re-runs).
@@ -1339,6 +1529,7 @@ def main():
     METER = TokenMeter()
     METER.set_vision_model(args.vision_model or "gemini-3-1-pro")
     METER.set_image_model(getattr(args, "image_model", ""))
+    METER.set_pro_resolution(args.hero_resolution)
 
     ID.init_project(args.project)
     cast_spec = ID.read_json(args.cast, DEFAULT_CAST) if args.cast else DEFAULT_CAST
@@ -1355,6 +1546,7 @@ def main():
         client.vision_model     = args.vision_model
         client.api_token   = args.api_token
         client.image_model = args.image_model
+        client.hero_model  = args.hero_model
         # Override director recipe path if explicitly specified
         if args.director_recipe:
             client.director_recipe = args.director_recipe

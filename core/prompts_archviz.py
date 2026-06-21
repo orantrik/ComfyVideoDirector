@@ -210,6 +210,40 @@ MASTER_PROMPT_EXT = (
 )
 
 
+# --------------------------------------------------------------------------- #
+#  Stage P - ultra-photorealistic finish (Nano Banana Pro) + realism inspector
+# --------------------------------------------------------------------------- #
+GEN_PHOTOREAL_HERO = (
+    "The FIRST reference image is the LOCKED composition for this scene. Keep its "
+    "exact layout, camera angle, architecture, proportions, lighting direction and "
+    "the position of every person and element ABSOLUTELY IDENTICAL. Re-render it as a "
+    "HYPER-PHOTOREALISTIC photograph that is indistinguishable from real life, as if "
+    "shot on a full-frame DSLR with a prime lens. EVERYTHING must look physically "
+    "real and correctly scaled: the people (natural anatomy, realistic skin, hair and "
+    "clothing, believable human height relative to doors/cars/furniture), the trees "
+    "and plants, the roads and pavement, the vehicles, the building materials, glass, "
+    "metal and concrete. Physically accurate lighting, soft realistic shadows, "
+    "ambient occlusion, accurate reflections and natural depth of field. Use the "
+    "other reference images ONLY to preserve the identity of each person and element. "
+    "Do NOT add, remove, move, resize, restyle or invent anything. Absolutely no CGI, "
+    "3D-render, illustration, cartoon or videogame look, no plastic skin, no warped "
+    "or duplicated limbs, no floating objects. Scene (cross-check only, the locked "
+    "image wins on any conflict): {space}."
+)
+
+REALISM_INSPECTOR = (
+    "You are a strict photorealism judge. Look at this generated architectural image "
+    "and rate how indistinguishable it is from a REAL photograph on a scale of 0 to "
+    "100 (100 = a genuine DSLR photo; below 60 = obvious CGI / 3D render / AI "
+    "artifacts). Penalise heavily: plastic, waxy or smeared skin; warped, extra or "
+    "missing limbs/fingers; wrong human scale or proportions; people or objects that "
+    "float or are duplicated; unnatural lighting or shadows; blurry, melted or "
+    "over-smooth details; fake-looking trees, foliage, roads, pavement or vehicles; "
+    "an over-rendered videogame look. Return STRICT JSON only: "
+    '{{"score": <int>, "problems": ["short specific issue", "..."]}}'
+)
+
+
 INSPECTOR_HOLISTIC = (
     "You are a QA inspector for an architectural composite image. Compare the "
     "GENERATED image against the locked INVENTORY of elements that should appear "
