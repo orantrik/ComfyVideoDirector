@@ -22,8 +22,8 @@ Unreal screenshots  →  Identity Container  →  Hero Images  →  Voiceover  �
 ### 1. ComfyUI
 
 - ComfyUI must be **running** during a live production run.
-- Start it from its folder: `python main.py --port 8001`
-- Default API port: `http://127.0.0.1:8001`
+- Just launch the **ComfyUI Desktop** app from your Start Menu (or `ComfyUI.exe`)
+- Your installation runs on **port 8000**: `http://127.0.0.1:8000`
 
 ### 2. Required models (place in the indicated ComfyUI subfolders)
 

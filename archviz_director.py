@@ -773,7 +773,7 @@ def main():
     ap.add_argument("--frames", required=True, help="folder of scene screenshots")
     ap.add_argument("--scene", type=int, default=0, help="single scene number (0 = all)")
     ap.add_argument("--cast", default="", help="cast spec JSON (spokesman + actors)")
-    ap.add_argument("--comfy-url", default="http://127.0.0.1:8001")
+    ap.add_argument("--comfy-url", default="http://127.0.0.1:8000")
     ap.add_argument("--recipes", default="", help="dir of API-format recipe graphs")
     ap.add_argument("--dry-run", action="store_true", help="offline scaffold with placeholders")
     ap.add_argument("--phases", default="1,2,3,4,5",
