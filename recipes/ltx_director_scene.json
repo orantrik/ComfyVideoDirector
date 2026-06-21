@@ -339,14 +339,12 @@
     }
   },
   "343": {
-    "class_type": "VAELoaderKJ",
+    "class_type": "VAELoader",
     "inputs": {
-      "vae_name": "LTX23_audio_vae_bf16.safetensors",
-      "device": "main_device",
-      "weight_dtype": "bf16"
+      "vae_name": "LTX23_audio_vae_bf16.safetensors"
     },
     "_meta": {
-      "title": "VAELoaderKJ"
+      "title": "VAELoader (audio, core - avoids comfy-aimdo mmap crash)"
     }
   },
   "313": {
