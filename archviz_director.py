@@ -813,8 +813,9 @@ def _audio_duration_secs(path, fallback=8.0, min_secs=1.0, max_secs=120.0):
         pass
 
     # 2. wave module — pure WAV only, but robust against LIST/INFO chunks.
-    import wave as _wave
+    #    Import is inside the try so a missing module (PyInstaller builds) is caught.
     try:
+        import wave as _wave
         with _wave.open(path, "rb") as wf:
             frames = wf.getnframes()
             rate   = wf.getframerate()
@@ -1022,21 +1023,36 @@ def stage_photoreal_each_variation(root, n, variations, src, space, client,
                 break
             raw = client.analyze(P.REALISM_INSPECTOR, tmp)
             try:
-                parsed   = json.loads(raw)
-                score    = int(parsed.get("score", 0))
-                problems = parsed.get("problems", [])
+                parsed      = json.loads(raw)
+                score       = int(parsed.get("score", 0))
+                corrections = parsed.get("corrections", parsed.get("problems", []))
             except (json.JSONDecodeError, TypeError, ValueError):
                 m = re.search(r'"score"\s*:\s*(\d+)', raw or "")
-                score, problems = (int(m.group(1)) if m else 0), []
+                score, corrections = (int(m.group(1)) if m else 0), []
             print(f"      realism score: {score}%", flush=True)
+            if corrections:
+                for c in corrections[:5]:
+                    if isinstance(c, dict):
+                        print(f"        [{c.get('element','?')}] {c.get('problem','')}",
+                              flush=True)
+                    else:
+                        print(f"        {c}", flush=True)
             if score > best_score:
                 best_score = score
                 shutil.copyfile(tmp, pro_cache)
             if score >= min_score:
                 break
-            if problems:
-                feedback = ("\n\nFIX THESE PHOTOREALISM PROBLEMS FROM PREVIOUS "
-                            "ATTEMPT: " + "; ".join(str(p) for p in problems))
+            if corrections:
+                lines = []
+                for c in corrections:
+                    if isinstance(c, dict):
+                        lines.append(f"[{c.get('element','element')}] "
+                                     f"PROBLEM: {c.get('problem','')} — "
+                                     f"FIX: {c.get('fix','')}")
+                    else:
+                        lines.append(str(c))
+                feedback = ("\n\nMANDATORY CORRECTIONS FOR THIS RENDER — apply every "
+                            "single one:\n" + "\n".join(f"• {l}" for l in lines))
 
         # Replace Flash variation with best Pro render.
         if os.path.isfile(pro_cache):
@@ -1255,22 +1271,36 @@ def stage_photoreal_finish(root, n, client, attempts=2, min_score=85, resolution
         client.generate_pro(prompt, refs, tmp, resolution=resolution)
         raw = client.analyze(P.REALISM_INSPECTOR, tmp)
         try:
-            parsed = json.loads(raw)
-            score = int(parsed.get("score", 0))
-            problems = parsed.get("problems", [])
+            parsed      = json.loads(raw)
+            score       = int(parsed.get("score", 0))
+            corrections = parsed.get("corrections", parsed.get("problems", []))
         except (json.JSONDecodeError, TypeError, ValueError):
             m = re.search(r'"score"\s*:\s*(\d+)', raw or "")
-            score = int(m.group(1)) if m else 0
-            problems = []
+            score, corrections = (int(m.group(1)) if m else 0), []
         print(f"      realism score: {score}%", flush=True)
+        if corrections:
+            for c in corrections[:5]:
+                if isinstance(c, dict):
+                    print(f"        [{c.get('element','?')}] {c.get('problem','')}",
+                          flush=True)
+                else:
+                    print(f"        {c}", flush=True)
         if score > best_score:
             best_score = score
             shutil.copyfile(tmp, final)
         if score >= min_score:
             break
-        if problems:
-            feedback = ("\n\nFIX THESE PHOTOREALISM PROBLEMS FROM THE PREVIOUS "
-                        "ATTEMPT: " + "; ".join(str(p) for p in problems))
+        if corrections:
+            lines = []
+            for c in corrections:
+                if isinstance(c, dict):
+                    lines.append(f"[{c.get('element','element')}] "
+                                 f"PROBLEM: {c.get('problem','')} — "
+                                 f"FIX: {c.get('fix','')}")
+                else:
+                    lines.append(str(c))
+            feedback = ("\n\nMANDATORY CORRECTIONS FOR THIS RENDER — apply every "
+                        "single one:\n" + "\n".join(f"• {l}" for l in lines))
 
     if os.path.isfile(final):
         shutil.copyfile(final, locked)   # the locked hero is now the photoreal one

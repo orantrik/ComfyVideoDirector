@@ -293,22 +293,42 @@ GEN_PHOTOREAL_HERO = (
 )
 
 REALISM_INSPECTOR = (
-    "You are a hyper-critical photorealism judge for architectural images. "
-    "Score 0–100 on how indistinguishable this is from a real DSLR photograph "
-    "(100 = real photo; below 70 = regenerate required). "
-    "Check EVERY one of these failure modes and penalise each heavily:\n"
-    "  - Wrong human scale (people too tall/short relative to cars, kerbs, doors, buildings)\n"
-    "  - Distorted, CGI or over-clean road/pavement surfaces\n"
-    "  - 3D-model look on any object: monuments, vehicles, statues, signs, street furniture\n"
-    "  - Repeated or tiling textures on any surface\n"
-    "  - Plastic/waxy/smeared skin, unnatural hair or clothing folds\n"
-    "  - Warped, extra or missing limbs or fingers\n"
-    "  - Fake-looking trees: identical billboard sprites, plastic leaves, wrong silhouette\n"
-    "  - Unnatural lighting: CGI bloom, no shadows, wrong shadow direction, neon glow\n"
-    "  - Floating objects, objects intersecting the ground incorrectly\n"
-    "  - Videogame or Unreal Engine render look (too sharp, too clean, no film grain)\n"
-    "Return STRICT JSON only — no markdown, no explanation outside the JSON: "
-    '{{"score": <int 0-100>, "problems": ["specific issue 1", "specific issue 2", ...]}}'
+    "You are a hyper-critical photorealism judge AND a skilled image-correction "
+    "director for architectural photography. Look at this generated image and:\n\n"
+    "1. Score it 0–100 on how indistinguishable it is from a genuine DSLR photograph "
+    "(100 = real photo; below 70 = must regenerate).\n\n"
+    "2. For EVERY realism failure you detect, write a SPECIFIC, ACTIONABLE correction "
+    "instruction — not a vague complaint. Each instruction must name the element, "
+    "describe EXACTLY what is wrong (with visible evidence), and state EXACTLY what "
+    "the next render must do differently. Examples of good instructions:\n"
+    "   BAD:  'People look wrong'\n"
+    "   GOOD: 'The man on the left appears ~3 m tall — taller than the car beside him. "
+    "Scale his height down by ~25%% so he is about 1.75 m relative to the car door.'\n"
+    "   BAD:  'Road looks fake'\n"
+    "   GOOD: 'The pavement on the right is rendered too smooth and uniformly grey — no "
+    "cracks, stains or real asphalt grain. Add micro-texture variation and a few oil "
+    "stains to make it look like an actual road surface.'\n"
+    "   BAD:  'Trees look CGI'\n"
+    "   GOOD: 'The palm tree on the far left has a billboard-sprite trunk with a "
+    "repeating bark texture visible on close inspection. Replace with a volumetric "
+    "palm with varied frond arrangement and natural colour variation.'\n\n"
+    "Failure modes to check (penalise each heavily in the score):\n"
+    "  - Wrong human scale vs kerbs, cars, doors, building base, windows\n"
+    "  - Distorted / over-clean / CGI road or pavement surface\n"
+    "  - 3D-model or plastic look on any object: monuments, vehicles, statues, "
+    "    signs, lamp posts, benches\n"
+    "  - Repeating or tiling textures on any building facade, road or ground\n"
+    "  - Plastic, waxy or smeared skin; unnatural hair; stiff clothing with no folds\n"
+    "  - Warped, extra, missing or unnaturally posed limbs or fingers\n"
+    "  - Fake trees / foliage: billboard sprites, identical leaves, plastic texture\n"
+    "  - Wrong lighting: CGI bloom, missing shadows, wrong shadow direction, neon glow\n"
+    "  - Floating objects or objects clipping into ground incorrectly\n"
+    "  - Unreal Engine / videogame look: too sharp, too clean, missing film grain\n\n"
+    "Return STRICT JSON only — no markdown fence, no explanation outside the JSON:\n"
+    '{{"score": <int 0-100>, '
+    '"corrections": ['
+    '{{"element": "<name>", "problem": "<exact visible issue>", "fix": "<precise instruction for next render>"}}'
+    ', ...]}}'
 )
 
 
