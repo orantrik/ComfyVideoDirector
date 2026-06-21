@@ -142,6 +142,16 @@ def voice_ref_path(root):
     return None
 
 
+def register_video(root, n, video_path):
+    """Register the scene video path in the index."""
+    idx = load_index(root)
+    idx.setdefault("scenes", {}).setdefault(scene_id(n), {})["video"] = {
+        "path": video_path
+    }
+    save_index(root, idx)
+    return video_path
+
+
 def register_audio(root, n, voiceover_path):
     """Register the scene voiceover path in the index."""
     idx = load_index(root)

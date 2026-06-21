@@ -107,6 +107,15 @@ class DryRunClient:
         print(f"    [dry-run audio] {engine} -> {os.path.basename(out_path)}")
         return out_path
 
+    def generate_video(self, positive, negative, hero_path, voiceover_path,
+                       duration_secs, out_path, prefix="scene"):
+        """Write a 4-byte placeholder .mp4 so Stage M exercises offline."""
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        with open(out_path, "wb") as fh:
+            fh.write(b"DRY\n")   # smallest possible sentinel
+        print(f"    [dry-run video] LTX-2 lip-sync -> {os.path.basename(out_path)}")
+        return out_path
+
 
 class ComfyClient:
     label = "comfyui"
@@ -117,10 +126,11 @@ class ComfyClient:
         self.url = comfy_url
         self.recipes = recipes_dir
         # Expected recipe files + the node ids the controller patches.
-        self.qwen_recipe = os.path.join(recipes_dir, "qwen_analyze.json")
-        self.nb_recipe   = os.path.join(recipes_dir, "nanobanana_gen.json")
-        self.f5_recipe   = os.path.join(recipes_dir, "f5_tts.json")
-        self.kokoro_recipe = os.path.join(recipes_dir, "kokoro_tts.json")
+        self.qwen_recipe    = os.path.join(recipes_dir, "qwen_analyze.json")
+        self.nb_recipe      = os.path.join(recipes_dir, "nanobanana_gen.json")
+        self.f5_recipe      = os.path.join(recipes_dir, "f5_tts.json")
+        self.kokoro_recipe  = os.path.join(recipes_dir, "kokoro_tts.json")
+        self.lipsync_recipe = os.path.join(recipes_dir, "lipsync_scene.json")
         # Node-id maps — must match the exported recipe graphs:
         self.qwen_nodes   = {"image": None, "user_prompt": None, "text_out": None}
         self.nb_nodes     = {"prompt": None, "image_1": None, "image_2": None, "save": None}
@@ -131,6 +141,18 @@ class ComfyClient:
         #   "1"=KokoroSpeaker, "2"=KokoroGenerator, "3"=SaveAudio
         self.kokoro_nodes = {"voice_node": "1", "text_node": "2", "save": "3"}
         self.kokoro_voice = "af_heart"   # change to preferred Kokoro voice preset
+        # LipSync / LTX-2 node IDs — match lipsync_scene.json layout:
+        #   "304"=CLIPTextEncode positive  "315"=CLIPTextEncode negative
+        #   "436"=AIDirectorLoadFrame      "414"=LoadAudio
+        #   "418"=TrimAudioDuration        "273"=SaveVideo
+        self.lipsync_nodes = {
+            "positive":  "304",
+            "negative":  "315",
+            "image":     "436",
+            "audio":     "414",
+            "trim":      "418",
+            "save":      "273",
+        }
 
     def analyze(self, user_prompt, image_path, system_prompt=""):
         up = self.api.upload_image(self.url, image_path)
@@ -184,6 +206,31 @@ class ComfyClient:
                 self.kokoro_nodes["save"]:       {"filename_prefix": prefix},
             }
             return self.api.run_recipe_audio(self.url, self.kokoro_recipe, patches, out_path)
+
+    def generate_video(self, positive, negative, hero_path, voiceover_path,
+                       duration_secs, out_path, prefix="scene"):
+        """Stage M: upload hero image + voiceover, queue LipSync LTX-2, download .mp4.
+
+        Patch map (matches lipsync_scene.json):
+          "304" CLIPTextEncode  -> inputs.text  (positive)
+          "315" CLIPTextEncode  -> inputs.text  (negative)
+          "436" AIDirectorLoadFrame -> inputs.image_path (absolute path)
+          "414" LoadAudio       -> inputs.audio (uploaded voiceover filename)
+          "418" TrimAudioDuration -> inputs.duration (float seconds)
+          "273" SaveVideo       -> inputs.filename_prefix
+        """
+        up_audio = self.api.upload_audio(self.url, voiceover_path)
+        n = self.lipsync_nodes
+        patches = {
+            n["positive"]: {"text":         positive},
+            n["negative"]: {"text":         negative},
+            n["image"]:    {"image_path":   os.path.abspath(hero_path)},
+            n["audio"]:    {"audio":        up_audio},
+            n["trim"]:     {"duration":     float(duration_secs)},
+            n["save"]:     {"filename_prefix": prefix},
+        }
+        return self.api.run_recipe_video(
+            self.url, self.lipsync_recipe, patches, out_path, timeout=3600)
 
 
 # --------------------------------------------------------------------------- #
@@ -343,6 +390,53 @@ def stage_audio(root, n, client, kokoro_voice="af_heart"):
     ID.register_audio(root, n, out_path)
     engine = "F5-TTS (voice clone)" if ref_audio else f"Kokoro TTS ({kokoro_voice})"
     print(f"  voiceover done [{engine}] -> audio/voiceover.wav (Stage H)")
+    return out_path
+
+
+# --------------------------------------------------------------------------- #
+#  Stages — Phase 4: M (Video)
+# --------------------------------------------------------------------------- #
+def _audio_duration_secs(wav_path):
+    """Read WAV header to get duration (seconds). Falls back to 8.0 on parse error."""
+    try:
+        with open(wav_path, "rb") as fh:
+            data = fh.read(44)
+        # bytes 24-27: sample rate  bytes 34-35: bits/sample  bytes 40-43: data chunk size
+        sample_rate  = struct.unpack_from("<I", data, 24)[0]
+        bits_per_smp = struct.unpack_from("<H", data, 34)[0]
+        channels     = struct.unpack_from("<H", data, 22)[0]
+        data_size    = struct.unpack_from("<I", data, 40)[0]
+        if sample_rate and bits_per_smp and channels:
+            return data_size / (sample_rate * channels * (bits_per_smp // 8))
+    except Exception:
+        pass
+    return 8.0   # safe default
+
+
+def stage_video(root, n, client):
+    """Stage M: generate the lip-sync video from hero_locked.png + voiceover.wav."""
+    d = ID.scene_dir(root, n)
+    hero      = os.path.join(d, "renders", "hero_locked.png")
+    voiceover = os.path.join(d, "audio", "voiceover.wav")
+    positive  = ID.read_text(os.path.join(d, "prompts", "positive.txt"), "")
+    negative  = ID.read_text(os.path.join(d, "prompts", "negative.txt"), "")
+
+    # Graceful fallback when upstream stages are skipped (re-run Phase 4 only).
+    if not os.path.isfile(hero):
+        hero = os.path.join(d, "source.png")
+    if not positive:
+        positive = ID.read_text(os.path.join(d, "prompts", "master_prompt.txt"), "")
+    if not negative:
+        negative = ("blurry, low quality, still frame, watermark, cartoon, "
+                    "duplicate person, frozen image, oversaturated, jump cut")
+
+    duration = _audio_duration_secs(voiceover) if os.path.isfile(voiceover) else 8.0
+    out_path  = os.path.join(d, "renders", "scene_video.mp4")
+    prefix    = f"{ID.scene_id(n)}/video/scene"
+
+    client.generate_video(positive, negative, hero, voiceover, duration, out_path, prefix)
+    ID.register_video(root, n, out_path)
+    print(f"  video done [{duration:.1f}s] -> renders/scene_video.mp4 (Stage M)")
     return out_path
 
 
@@ -530,7 +624,10 @@ def run_scene(root, n, src, client, phases=(1, 2, 3), _kokoro_voice="af_heart"):
         vr = report["variations"][best_idx]
         gate = "PASS" if vr["passes_gate"] else f"best={vr['average']:.0f}%"
         print(f"  inspector done [{gate}] (Stage K)")
-        locked = stage_lock_hero(root, n, variations, best_idx, report)
+        stage_lock_hero(root, n, variations, best_idx, report)
+
+    if 4 in phases:
+        stage_video(root, n, client)
 
     return {"furniture": furniture, "objects": objects, "space": space}
 
@@ -552,8 +649,8 @@ def main():
     ap.add_argument("--comfy-url", default="http://127.0.0.1:8001")
     ap.add_argument("--recipes", default="", help="dir of API-format recipe graphs")
     ap.add_argument("--dry-run", action="store_true", help="offline scaffold with placeholders")
-    ap.add_argument("--phases", default="1,2,3",
-                    help="comma-separated phases to run, e.g. '1' or '1,2,3' (default: 1,2,3)")
+    ap.add_argument("--phases", default="1,2,3,4",
+                    help="comma-separated phases to run, e.g. '1' or '1,2,3,4' (default: 1,2,3,4)")
     ap.add_argument("--kokoro-voice", default="af_heart",
                     help="Kokoro TTS voice preset used when no voice_ref clip is present "
                          "(default: af_heart). See Kokoro docs for available voices.")
