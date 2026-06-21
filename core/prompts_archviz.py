@@ -58,13 +58,14 @@ GEN_PACKSHOT_4VIEW = (
 )
 
 GEN_SPACE_MAP = (
-    "The FIRST reference image is a real photograph of this exact room and is the "
+    "The FIRST reference image is a real photograph of this exact scene and is the "
     "absolute ground truth. Produce a top-down / isometric annotated map of THIS "
-    "EXACT room: reproduce the real layout, proportions, walls, windows and the "
-    "position of every furniture piece exactly as seen in the photo. Do NOT invent, "
-    "move, add or remove anything. Add clear text LABELS and coloured SEGMENTATION "
-    "overlays for each distinct area and major furniture group. Cross-check against "
-    "this description (the photo wins on any conflict): {desc}."
+    "EXACT scene: reproduce the real layout, proportions and the position of every "
+    "element (buildings/structures or furniture, openings, site features) exactly as "
+    "seen in the photo. Do NOT invent, move, add or remove anything. Add clear text "
+    "LABELS and coloured SEGMENTATION overlays for each distinct zone and major "
+    "element group. Cross-check against this description (the photo wins on any "
+    "conflict): {desc}."
 )
 
 GEN_CHARACTER_SHEET = (
@@ -85,28 +86,28 @@ GEN_CLOTHES_PACKSHOT = (
 )
 
 GEN_EMPTY_SPACE_STABILIZED = (
-    "The FIRST reference image is a real photograph of this room and is the "
-    "ABSOLUTE GROUND TRUTH for architecture, camera angle, proportions, walls, "
-    "windows, floor and the position of every furniture piece and object. Reproduce "
-    "that EXACT space photorealistically. Use the additional reference images only as "
-    "the identity of individual items. Do NOT add, remove, move, resize, restyle or "
-    "invent any furniture, object or architectural feature \u2014 keep the space identical "
-    "to the photo. Natural architectural lighting. Space description (cross-check only, "
-    "the photo wins on any conflict): {space}."
+    "The FIRST reference image is a real photograph of this scene and is the "
+    "ABSOLUTE GROUND TRUTH for architecture, camera angle, proportions, massing, "
+    "openings, ground/floor and the position of every element. Reproduce that EXACT "
+    "space photorealistically. Use the additional reference images only as the "
+    "identity of individual elements. Do NOT add, remove, move, resize, restyle or "
+    "invent any building, structure, furniture, object, landscaping or architectural "
+    "feature \u2014 keep the space identical to the photo. Natural architectural lighting. "
+    "Space description (cross-check only, the photo wins on any conflict): {space}."
 )
 
 GEN_HERO_COMPOSITE = (
-    "The FIRST reference image is a real photograph of this EXACT room and is the "
+    "The FIRST reference image is a real photograph of this EXACT scene and is the "
     "absolute ground truth for the space: keep its architecture, camera angle, "
-    "proportions, walls, windows, lighting, floor and the position of every furniture "
-    "piece and object IDENTICAL to the photo. Do not alter, move, restyle or invent any "
-    "part of the space. Using the other reference images for the identity of each person "
-    "and item, place the spokesman and the secondary actors naturally INTO this same "
+    "proportions, massing, openings, lighting, ground/floor and the position of every "
+    "element IDENTICAL to the photo. Do not alter, move, restyle or invent any part of "
+    "the space. Using the other reference images for the identity of each person and "
+    "element, place the spokesman and the secondary actors naturally INTO this same "
     "space according to these positions: {coords}. Every person matches their reference "
-    "sheet exactly (face, hair, outfit). People only interact with objects that already "
-    "exist in the room. Do not invent any new object, prop, person or architectural "
-    "feature. Photorealistic, cinematic, fully consistent with the reference photo. "
-    "Scene description (cross-check only, the photo wins): {space}."
+    "sheet exactly (face, hair, outfit). People only interact with elements that already "
+    "exist in the scene. Do not invent any new object, prop, person, building or "
+    "architectural feature. Photorealistic, cinematic, fully consistent with the "
+    "reference photo. Scene description (cross-check only, the photo wins): {space}."
 )
 
 # --------------------------------------------------------------------------- #
@@ -146,6 +147,81 @@ INSPECTOR = (
     "appears that is NOT in the locked inventory. Return strict JSON: "
     '{{"label":"{label}","score":<int>,"hallucinations":[...],"notes":"..."}}'
 )
+
+
+# --------------------------------------------------------------------------- #
+#  EXTERIOR ArchViz variants
+#  Selected at runtime when --scene-type exterior is passed. These reuse the
+#  same code paths (the orchestrator keeps the "furniture"/"objects" buckets)
+#  but ask Qwen/NanoBanana about buildings, site features and outdoor props
+#  instead of interior furnishings.
+# --------------------------------------------------------------------------- #
+ANALYSIS_ELEMENTS_EXT = (
+    "You are an architectural visualization supervisor analysing an EXTERIOR scene. "
+    "List every major BUILT or STRUCTURAL element: each building/tower, podium, "
+    "annex, roof structure, façade system, balcony band, entrance/canopy, bridge, "
+    "pergola, retaining wall and major hardscape structure. For each, output one "
+    "line:\n"
+    "id | short name | form, materials, colour, key façade features | exact location "
+    "in the scene (left/right/centre, foreground/background, relative to other "
+    "masses). Be literal and precise. Do not invent anything that is not visible."
+)
+
+ANALYSIS_SITE_OBJECTS_EXT = (
+    "You are an architectural visualization supervisor analysing an EXTERIOR scene. "
+    "List every secondary SITE element / outdoor object: vehicles, trees and "
+    "planting, street furniture, signage, lamp posts / lighting, sculptures, "
+    "bollards, fences/railings, pools and water features, awnings, and any people. "
+    "For each, output one line:\n"
+    "id | short name | material / colour / type | exact location (which area, near "
+    "which building). Be literal. Do not invent objects that are not visible."
+)
+
+ANALYSIS_SPACE_EXT = (
+    "You are an architectural visualization site analyst. Describe this EXTERIOR "
+    "scene: overall site composition and style, the massing and approximate scale of "
+    "each building (storeys / height, best estimate), the camera viewpoint, and a "
+    "breakdown of distinct ZONES (e.g. tower cluster, podium, forecourt / parking, "
+    "landscaped areas, street / approach, skyline / background) with their "
+    "approximate location. Note ground surfaces, sky / time-of-day and any site "
+    "caveats. Return concise structured text."
+)
+
+GEN_PACKSHOT_EXT = (
+    "The reference image is a real photograph of an architectural scene. Find the "
+    "element described below in that photo and create a clean isolated REFERENCE "
+    "render of THAT EXACT element (same form, materials, colour, proportions and "
+    "façade / detailing as seen in the photo) on a neutral plain background with even "
+    "lighting. Show it from THREE to FOUR representative angles in a grid. Do not "
+    "redesign, restyle, simplify or embellish it. Element: {desc}. Photorealistic, "
+    "sharp, reference quality."
+)
+
+MASTER_PROMPT_EXT = (
+    "Write a single cinematic master prompt describing the START FRAME of the next "
+    "shot of this EXTERIOR architectural scene and how it should look and feel. Base "
+    "it strictly on the locked identities below; reference the real buildings, site "
+    "elements and any people by their description and location. Keep it photorealistic "
+    "and continuous with the current shot.\n\nSITE:\n{space}\n\nBUILT ELEMENTS:\n"
+    "{furniture}\n\nSITE OBJECTS:\n{objects}\n\nCAST:\n{cast}\n"
+)
+
+
+def apply_scene_type(scene_type):
+    """Repoint the active analysis/packshot/master prompts for the given scene type.
+
+    Stages read the module-level P.* attributes at call time, so swapping them
+    here switches the whole pipeline between interior furnishings and exterior
+    buildings/site features. Idempotent and safe to call repeatedly.
+    """
+    g = globals()
+    if str(scene_type).lower() == "exterior":
+        g["ANALYSIS_FURNITURE"] = ANALYSIS_ELEMENTS_EXT
+        g["ANALYSIS_OBJECTS"]   = ANALYSIS_SITE_OBJECTS_EXT
+        g["ANALYSIS_SPACE"]     = ANALYSIS_SPACE_EXT
+        g["GEN_PACKSHOT_4VIEW"] = GEN_PACKSHOT_EXT
+        g["MASTER_PROMPT"]      = MASTER_PROMPT_EXT
+    return scene_type
 
 
 def fill(template, **kw):

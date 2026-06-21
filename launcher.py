@@ -93,6 +93,7 @@ class App(tk.Tk):
         self.var_phases = tk.StringVar(value="1,2,3,4,5")
         self.var_voice = tk.StringVar(value="af_heart")
         self.var_compose = tk.StringVar(value="hard_cut_reencode")
+        self.var_scene_type = tk.StringVar(value="exterior")
         self.var_dryrun = tk.BooleanVar(value=False)
         self.var_token = tk.StringVar()
         self.var_model = tk.StringVar(value="Nano Banana 2 (Gemini 3.1 Flash Image)")
@@ -160,9 +161,14 @@ class App(tk.Tk):
         ttk.Combobox(opts, textvariable=self.var_compose, width=18,
                      values=["hard_cut_reencode", "hard_cut_copy", "crossfade"],
                      state="readonly").grid(row=0, column=5, sticky="w", padx=4)
+        tk.Label(opts, text="Scene type:").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        ttk.Combobox(opts, textvariable=self.var_scene_type, width=13,
+                     values=["exterior", "interior"],
+                     state="readonly").grid(row=1, column=1, sticky="w",
+                                             padx=(4, 18), pady=(6, 0))
         ttk.Checkbutton(opts, text="Dry-run (offline scaffold)",
                         variable=self.var_dryrun).grid(
-            row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
+            row=1, column=2, columnspan=4, sticky="w", pady=(6, 0))
 
         # API token + image model (for Gemini / NanoBanana API nodes)
         tk.Label(opts, text="API token:").grid(row=2, column=0, sticky="w", pady=(8, 0))
@@ -374,6 +380,10 @@ class App(tk.Tk):
         def work():
             try:
                 from core import gallery as G
+                from core import prompts_archviz as P
+                # Match the project's scene type so regenerated packshots/heroes use
+                # the same (interior vs exterior) prompt vocabulary as the full run.
+                P.apply_scene_type(self.var_scene_type.get().strip() or "exterior")
                 client = self._make_client(dry)
                 out = G.regen_element(self.var_project.get().strip(), meta, client)
                 self.after(0, self._log, f"[ok] regenerated: {out}\n", "ok")
@@ -468,6 +478,7 @@ class App(tk.Tk):
             self.var_phases.set(s.get("phases", "1,2,3,4,5"))
             self.var_voice.set(s.get("voice", "af_heart"))
             self.var_compose.set(s.get("compose", "hard_cut_reencode"))
+            self.var_scene_type.set(s.get("scene_type", "exterior"))
             self.var_token.set(s.get("token", ""))
             self.var_model.set(s.get("model", "Nano Banana 2 (Gemini 3.1 Flash Image)"))
         except Exception:
@@ -483,6 +494,7 @@ class App(tk.Tk):
                 "phases": self.var_phases.get(),
                 "voice": self.var_voice.get(),
                 "compose": self.var_compose.get(),
+                "scene_type": self.var_scene_type.get(),
                 "token": self.var_token.get(),
                 "model": self.var_model.get(),
             }
@@ -509,7 +521,8 @@ class App(tk.Tk):
                 "--project", project, "--frames", frames, "--recipes", RECIPES_DIR,
                 "--phases", self.var_phases.get().strip() or "1,2,3,4,5",
                 "--kokoro-voice", self.var_voice.get().strip() or "af_heart",
-                "--compose-mode", self.var_compose.get().strip()]
+                "--compose-mode", self.var_compose.get().strip(),
+                "--scene-type", self.var_scene_type.get().strip() or "exterior"]
         if self.var_model.get().strip():
             argv += ["--image-model", self.var_model.get().strip()]
         if self.var_token.get().strip():

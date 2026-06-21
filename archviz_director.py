@@ -68,6 +68,26 @@ class DryRunClient:
     def analyze(self, user_prompt, image_path, system_prompt=""):
         # Canned, structurally-valid responses so every pipeline stage exercises fully.
         # Order matters: more specific checks first.
+        # --- EXTERIOR ArchViz dry-run responses ---
+        if "BUILT or STRUCTURAL element" in user_prompt:
+            return ("f01 | north tower | slim glass-and-concrete high-rise, vertical "
+                    "balcony bands, ~30 storeys | centre-left, foreground\n"
+                    "f02 | south tower | matching glass tower, stepped crown | "
+                    "centre-right, slightly behind north tower\n"
+                    "f03 | podium | 3-storey stone-clad base linking both towers | "
+                    "ground level, spanning the scene")
+        if "secondary SITE element" in user_prompt:
+            return ("o01 | entrance canopy | brushed-steel and glass | base of north "
+                    "tower, centre\n"
+                    "o02 | mature trees | row of green deciduous trees | along the "
+                    "forecourt, foreground\n"
+                    "o03 | parked car | dark grey sedan | kerbside, lower-left")
+        if "EXTERIOR scene: overall site composition" in user_prompt:
+            return ("Two slender residential towers on a shared stone podium, modern "
+                    "glass architecture, early-evening sky. Zones: tower cluster "
+                    "(centre), podium/retail (ground), landscaped forecourt "
+                    "(foreground), street/approach (lower edge), city skyline "
+                    "(background).")
         if "every small OBJECT" in user_prompt:
             return ("o01 | short whisky glass | clear cut crystal | on the coffee table, right side\n"
                     "o02 | ceramic vase | matte sage green | on the side table, left of sofa")
@@ -534,12 +554,23 @@ def stage_audio(root, n, client, kokoro_voice="af_heart"):
         # Fallback: use a trimmed master prompt if audio_prompt wasn't written yet.
         audio_prompt = ID.read_text(
             os.path.join(ID.scene_dir(root, n), "prompts", "master_prompt.txt"), "")[:300]
+    if not audio_prompt.strip():
+        # Final safety net — TTS nodes (Kokoro/F5) output None for empty text, which
+        # crashes SaveAudio ("input audio is None"). Always send real words.
+        audio_prompt = ("This is a place designed with intention, where light and "
+                        "form come together to create something quietly remarkable.")
 
     ref_audio = ID.voice_ref_path(root)   # None if no voice_ref clip is present
     out_path   = os.path.join(ID.scene_dir(root, n), "audio", "voiceover.wav")
-    client.generate_audio(audio_prompt, ref_audio, out_path, voice=kokoro_voice)
-    ID.register_audio(root, n, out_path)
     engine = "F5-TTS (voice clone)" if ref_audio else f"Kokoro TTS ({kokoro_voice})"
+    try:
+        client.generate_audio(audio_prompt, ref_audio, out_path, voice=kokoro_voice)
+    except Exception as e:
+        # Voiceover is non-essential — never let a TTS failure abort the whole film.
+        # The video stage falls back to a default clip duration when audio is absent.
+        print(f"  [warn] voiceover skipped ({engine}): {e}")
+        return None
+    ID.register_audio(root, n, out_path)
     print(f"  voiceover done [{engine}] -> audio/voiceover.wav (Stage H)")
     return out_path
 
@@ -645,10 +676,20 @@ def stage_master_prompt(root, n, furniture, objects, space, client, prev_master=
     master = client.analyze(
         P.fill(P.MASTER_PROMPT, space=space, furniture=furn_text,
                objects=obj_text, cast=cast_text) + prev_ctx, src)
+    if not (master or "").strip():
+        # Never leave the master prompt empty — fall back to the space description
+        # (or a generic line) so downstream audio/video stages always have text.
+        master = (space or "").strip() or (
+            "A cinematic, photorealistic establishing shot of this architectural "
+            "scene, presented with clarity, depth and confident composition.")
     audio = client.analyze(
         "Write a 2–3 sentence voiceover narration for a luxury ArchViz branded film "
         "based on this scene description. Elegant, third person, concise: " + master[:400],
         src)
+    if not (audio or "").strip():
+        # Guard against an empty narration so Kokoro/F5 never receive blank text.
+        audio = ("This is a place designed with intention — where light, form and "
+                 "space come together to create something quietly remarkable.")
     prompts_dir = os.path.join(ID.scene_dir(root, n), "prompts")
     ID.write_text(os.path.join(prompts_dir, "master_prompt.txt"), master)
     ID.write_text(os.path.join(prompts_dir, "audio_prompt.txt"), audio)
@@ -950,6 +991,12 @@ def main():
     ap.add_argument("--project", required=True, help="project root folder")
     ap.add_argument("--frames", required=True, help="folder of scene screenshots")
     ap.add_argument("--scene", type=int, default=0, help="single scene number (0 = all)")
+    ap.add_argument("--scene-type", default="interior",
+                    choices=["interior", "exterior"],
+                    help="interior = furniture/props analysis (default); exterior = "
+                         "buildings, façades, landscaping, vehicles, signage. Switches "
+                         "the Qwen analysis + NanoBanana packshot/master prompts so "
+                         "element-identity locking works on exterior ArchViz scenes.")
     ap.add_argument("--cast", default="", help="cast spec JSON (spokesman + actors)")
     ap.add_argument("--comfy-url", default="http://127.0.0.1:8000")
     ap.add_argument("--recipes", default="", help="dir of API-format recipe graphs")
@@ -995,6 +1042,15 @@ def main():
     args = ap.parse_args()
 
     phases = set(int(p.strip()) for p in args.phases.split(",") if p.strip())
+
+    # Exterior mode: repoint the analysis/packshot/master prompts to the EXTERIOR
+    # variants. The stages read these P.* attributes at call time, so reassigning
+    # them here (before the scene loop) swaps the whole pipeline's vocabulary from
+    # interior furnishings to buildings, façades, landscaping, vehicles and signage.
+    P.apply_scene_type(args.scene_type)
+    if args.scene_type == "exterior":
+        print("[scene-type] EXTERIOR ArchViz mode "
+              "(buildings, façades, landscaping, vehicles, signage)")
 
     ID.init_project(args.project)
     cast_spec = ID.read_json(args.cast, DEFAULT_CAST) if args.cast else DEFAULT_CAST
