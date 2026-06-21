@@ -456,17 +456,24 @@ def stage_coordinates(root, n, src, client):
     return coords
 
 
-def stage_master_prompt(root, n, furniture, objects, space, client):
-    """Stage G (part 2): master prompt for the next scene + audio prompt."""
+def stage_master_prompt(root, n, furniture, objects, space, client, prev_master=""):
+    """Stage G (part 2): master prompt for the next scene + audio prompt.
+
+    If `prev_master` is provided (scene N-1's master_prompt), it is injected as
+    context so the model knows where we are arriving FROM, enabling cross-scene
+    continuity.
+    """
     src = os.path.join(ID.scene_dir(root, n), "source.png")
     cast_text = _format_cast(ID.load_index(root).get("cast", {}))
     furn_text = "\n".join(f"{it['id']} | {it['name']} | {it['desc']} | {it['location']}"
                           for it in furniture)
     obj_text  = "\n".join(f"{it['id']} | {it['name']} | {it['desc']} | {it['location']}"
                           for it in objects)
+    prev_ctx = (f"\n\nPREVIOUS SCENE CONTEXT (the scene we are arriving from):\n"
+                f"{prev_master[:600]}") if prev_master.strip() else ""
     master = client.analyze(
         P.fill(P.MASTER_PROMPT, space=space, furniture=furn_text,
-               objects=obj_text, cast=cast_text), src)
+               objects=obj_text, cast=cast_text) + prev_ctx, src)
     audio = client.analyze(
         "Write a 2–3 sentence voiceover narration for a luxury ArchViz branded film "
         "based on this scene description. Elegant, third person, concise: " + master[:400],
@@ -477,11 +484,15 @@ def stage_master_prompt(root, n, furniture, objects, space, client):
     return master, audio
 
 
-def stage_hero_composite(root, n, space, coords, client):
-    """Stage I: generate 4 hero-composite variations (space + cast + coords)."""
+def stage_hero_composite(root, n, space, coords, client, prev_master=""):
+    """Stage I: generate 4 hero-composite variations (space + cast + coords).
+
+    `prev_master` provides the incoming-scene context for cross-scene continuity.
+    """
     refs = list(ID.reference_images(root, n))
     coords_str = json.dumps(coords)
-    prompt = P.fill(P.GEN_HERO_COMPOSITE, space=space, coords=coords_str)
+    prev_ctx = (f" Arriving from: {prev_master[:300]}.") if prev_master.strip() else ""
+    prompt = P.fill(P.GEN_HERO_COMPOSITE, space=space, coords=coords_str) + prev_ctx
     variations = []
     for v in range(1, 5):
         out = os.path.join(ID.scene_dir(root, n), "renders", f"hero_v{v}.png")
@@ -582,9 +593,10 @@ def stage_lock_hero(root, n, variations, best_idx, report):
 
 
 # --------------------------------------------------------------------------- #
-#  Scene runner (phases 1 + 2 + 3)
+#  Scene runner (phases 1–4)
 # --------------------------------------------------------------------------- #
-def run_scene(root, n, src, client, phases=(1, 2, 3), _kokoro_voice="af_heart"):
+def run_scene(root, n, src, client, phases=(1, 2, 3, 4),
+              _kokoro_voice="af_heart", prev_master=""):
     print(f"\n=== SCENE {n} ({client.label}) ===")
 
     if 1 in phases:
@@ -609,14 +621,20 @@ def run_scene(root, n, src, client, phases=(1, 2, 3), _kokoro_voice="af_heart"):
     if 2 in phases:
         coords = stage_coordinates(root, n, src, client)
         print(f"  coordinates: {len(coords)} elements (Stage G)")
-        master, _ = stage_master_prompt(root, n, furniture, objects, space, client)
-        print("  master prompt + audio prompt done (Stage G)")
+        master, _ = stage_master_prompt(root, n, furniture, objects, space, client,
+                                        prev_master=prev_master)
+        print("  master prompt + audio prompt done (Stage G)"
+              + (f" [with scene {n-1} context]" if prev_master else ""))
+    else:
+        master = ID.read_text(
+            os.path.join(ID.scene_dir(root, n), "prompts", "master_prompt.txt"), "")
 
     if 3 in phases:
         stage_audio(root, n, client, kokoro_voice=_kokoro_voice)
 
     if 2 in phases:
-        variations = stage_hero_composite(root, n, space, coords, client)
+        variations = stage_hero_composite(root, n, space, coords, client,
+                                          prev_master=prev_master)
         print(f"  hero composite: {len(variations)} variations (Stage I)")
         stage_reconcile(root, n, furniture, objects, coords, client)
         print("  prompts reconciled (Stage J)")
@@ -629,7 +647,116 @@ def run_scene(root, n, src, client, phases=(1, 2, 3), _kokoro_voice="af_heart"):
     if 4 in phases:
         stage_video(root, n, client)
 
-    return {"furniture": furniture, "objects": objects, "space": space}
+    return {"furniture": furniture, "objects": objects, "space": space,
+            "master": master}
+
+
+# --------------------------------------------------------------------------- #
+#  Phase 5 — compose
+# --------------------------------------------------------------------------- #
+def _find_ffmpeg():
+    import shutil as _sh
+    exe = _sh.which("ffmpeg")
+    if exe:
+        return exe
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return None
+
+
+def stage_compose(root, out_path=None, mode="hard_cut_reencode",
+                  fps=24, crossfade_secs=0.5, clip_duration=8):
+    """Phase 5 (Stage N): collect all scene_XX/renders/scene_video.mp4 in scene order
+    and concatenate them into the final branded film using ffmpeg.
+
+    mode options:
+      hard_cut_reencode  — safe, re-encodes to h264 mp4 (default)
+      hard_cut_copy      — stream-copy (fastest, needs compatible codecs)
+      crossfade          — xfade dissolve between clips
+    """
+    import tempfile, glob as _glob
+
+    scenes_dir = os.path.join(root, "scenes")
+    clips = sorted(
+        _glob.glob(os.path.join(scenes_dir, "scene_*", "renders", "scene_video.mp4")),
+        key=lambda p: p  # sorted() on path already gives scene_01 < scene_02 …
+    )
+    if not clips:
+        print("  [compose] no scene_video.mp4 files found — skipping.")
+        return None
+
+    print(f"  [compose] {len(clips)} clip(s):")
+    for c in clips:
+        print(f"    {c}")
+
+    out_path = out_path or os.path.join(root, "final_film.mp4")
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+
+    ffmpeg = _find_ffmpeg()
+    if not ffmpeg:
+        print("  [compose] ffmpeg not found — writing clip list to final_film.txt instead.")
+        with open(out_path.replace(".mp4", ".txt"), "w", encoding="utf-8") as fh:
+            for c in clips:
+                fh.write(c + "\n")
+        return out_path.replace(".mp4", ".txt")
+
+    # Check for dry-run sentinel clips (4-byte placeholders) — skip actual concat.
+    dry = all(os.path.getsize(c) <= 16 for c in clips)
+    if dry:
+        with open(out_path, "wb") as fh:
+            fh.write(b"DRY_COMPOSE\n")
+        print(f"  [compose] dry-run sentinel -> {os.path.basename(out_path)}")
+        return out_path
+
+    fd, listfile = tempfile.mkstemp(suffix=".txt")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            for c in clips:
+                safe = c.replace("'", "'\\''")
+                fh.write(f"file '{safe}'\n")
+
+        if mode == "crossfade" and len(clips) > 1 and crossfade_secs > 0:
+            cmd = [ffmpeg, "-y"]
+            for c in clips:
+                cmd += ["-i", c]
+            filt, prev, offset = [], "[0:v]", clip_duration - crossfade_secs
+            for i in range(1, len(clips)):
+                out_tag = f"[v{i}]"
+                filt.append(f"{prev}[{i}:v]xfade=transition=fade:"
+                            f"duration={crossfade_secs}:offset={offset:.3f}{out_tag}")
+                prev = out_tag
+                offset += clip_duration - crossfade_secs
+            cmd += ["-filter_complex", ";".join(filt), "-map", prev,
+                    "-r", str(fps), "-c:v", "libx264", "-crf", "18",
+                    "-preset", "medium", "-pix_fmt", "yuv420p", out_path]
+        elif mode == "hard_cut_copy":
+            cmd = [ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", listfile,
+                   "-c", "copy", out_path]
+        else:
+            cmd = [ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", listfile,
+                   "-r", str(fps), "-c:v", "libx264", "-crf", "18",
+                   "-preset", "medium", "-pix_fmt", "yuv420p", "-c:a", "aac", out_path]
+
+        import subprocess as _sp
+        r = _sp.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            print("  [compose] ffmpeg FAILED:")
+            print(r.stderr[-1500:])
+            return None
+    finally:
+        try:
+            os.unlink(listfile)
+        except OSError:
+            pass
+
+    size_mb = os.path.getsize(out_path) / (1024 * 1024) if os.path.isfile(out_path) else 0
+    print(f"  [compose] DONE -> {out_path} ({size_mb:.1f} MB)")
+    ID.write_json(os.path.join(root, "compose_manifest.json"), {
+        "clips": clips, "output": out_path, "mode": mode, "fps": fps,
+    })
+    return out_path
 
 
 DEFAULT_CAST = {
@@ -649,11 +776,24 @@ def main():
     ap.add_argument("--comfy-url", default="http://127.0.0.1:8001")
     ap.add_argument("--recipes", default="", help="dir of API-format recipe graphs")
     ap.add_argument("--dry-run", action="store_true", help="offline scaffold with placeholders")
-    ap.add_argument("--phases", default="1,2,3,4",
-                    help="comma-separated phases to run, e.g. '1' or '1,2,3,4' (default: 1,2,3,4)")
+    ap.add_argument("--phases", default="1,2,3,4,5",
+                    help="comma-separated phases to run (default: 1,2,3,4,5). "
+                         "Phase 5 = final film compose only; can be run standalone.")
     ap.add_argument("--kokoro-voice", default="af_heart",
                     help="Kokoro TTS voice preset used when no voice_ref clip is present "
                          "(default: af_heart). See Kokoro docs for available voices.")
+    ap.add_argument("--compose-mode", default="hard_cut_reencode",
+                    choices=["hard_cut_reencode", "hard_cut_copy", "crossfade"],
+                    help="ffmpeg assembly mode for Phase 5 (default: hard_cut_reencode)")
+    ap.add_argument("--crossfade-secs", type=float, default=0.5,
+                    help="crossfade duration in seconds when --compose-mode=crossfade "
+                         "(default: 0.5)")
+    ap.add_argument("--clip-duration", type=int, default=8,
+                    help="expected clip duration in seconds, used for crossfade timing "
+                         "(default: 8)")
+    ap.add_argument("--output-film", default="",
+                    help="output path for the final composed film "
+                         "(default: <project>/final_film.mp4)")
     args = ap.parse_args()
 
     phases = set(int(p.strip()) for p in args.phases.split(",") if p.strip())
@@ -682,9 +822,20 @@ def main():
     else:
         scene_nums = list(range(1, len(frames) + 1))
 
+    prev_master = ""
+    scene_phases = phases - {5}   # phases 1-4 run per scene; 5 is post-loop
     for n, src in zip(scene_nums, frames):
-        run_scene(args.project, n, src, client, phases=phases,
-                  _kokoro_voice=args.kokoro_voice)
+        result = run_scene(args.project, n, src, client, phases=scene_phases,
+                           _kokoro_voice=args.kokoro_voice, prev_master=prev_master)
+        prev_master = result.get("master", "")
+
+    if 5 in phases:
+        print("\n=== PHASE 5 — COMPOSE FINAL FILM ===")
+        out_film = args.output_film or os.path.join(args.project, "final_film.mp4")
+        stage_compose(args.project, out_path=out_film,
+                      mode=args.compose_mode,
+                      crossfade_secs=args.crossfade_secs,
+                      clip_duration=args.clip_duration)
 
     print(f"\nDONE. Identity container at: {args.project}")
     print(f"Index: {ID.index_path(args.project)}")
