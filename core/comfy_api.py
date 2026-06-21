@@ -58,6 +58,37 @@ def upload_image(comfy_url, filepath, overwrite=True):
     return f"{sub}/{name}" if sub else name
 
 
+_PLACEHOLDER_UPLOADED: set = set()   # per-process cache of URLs already seeded
+
+# Minimal 1×1 white PNG (valid image, smallest possible)
+_PLACEHOLDER_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQ"
+    "AABjkB6QAAAABJRU5ErkJggg=="
+)
+
+
+def ensure_placeholder(comfy_url):
+    """Upload a 1×1 white PNG as 'placeholder.png' if not done yet this session."""
+    if comfy_url in _PLACEHOLDER_UPLOADED:
+        return
+    import base64, tempfile
+    png_data = base64.b64decode(_PLACEHOLDER_PNG_B64)
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+        tmp.write(png_data)
+        tmp_path = tmp.name
+    # Rename to placeholder.png for the upload
+    placeholder_path = os.path.join(os.path.dirname(tmp_path), "placeholder.png")
+    os.replace(tmp_path, placeholder_path)
+    try:
+        upload_image(comfy_url, placeholder_path, overwrite=True)
+        _PLACEHOLDER_UPLOADED.add(comfy_url)
+    finally:
+        try:
+            os.remove(placeholder_path)
+        except OSError:
+            pass
+
+
 def queue(comfy_url, api_prompt, client_id):
     out = _post_json(comfy_url.rstrip("/") + "/prompt",
                      {"prompt": api_prompt, "client_id": client_id})
@@ -152,7 +183,7 @@ def run_recipe_video(comfy_url, recipe_api_json_path, patches, out_path, client_
     Unknown patch node IDs are silently skipped (warning only) to allow partial patching.
     """
     client_id = client_id or uuid.uuid4().hex
-    api = _load_recipe(recipe_api_json_path, patches, warn_missing=True)
+    api = _load_recipe(recipe_api_json_path, patches, warn_missing=True, comfy_url=comfy_url)
     pid = queue(comfy_url, api, client_id)
     hist = wait(comfy_url, pid, timeout=timeout)
     items = collect_videos(hist, video_node=video_node)
@@ -164,12 +195,23 @@ def run_recipe_video(comfy_url, recipe_api_json_path, patches, out_path, client_
     return _download(comfy_url, items[0], out_path)
 
 
-def _load_recipe(path, patches, warn_missing=False):
+def _load_recipe(path, patches, warn_missing=False, comfy_url=None):
     """Load an API-format recipe JSON, strip comment keys (starting with '_'),
-    apply patches, and return the ready-to-queue dict."""
+    apply patches, and return the ready-to-queue dict.
+
+    If comfy_url is provided and the recipe references 'placeholder.png', the
+    placeholder is uploaded to ComfyUI so LoadImage validation passes.
+    """
     api = json.load(open(path, encoding="utf-8"))
     # Strip documentation/comment keys so ComfyUI doesn't trip on them
     api = {k: v for k, v in api.items() if not k.startswith("_")}
+
+    # Ensure placeholder.png exists in ComfyUI input folder if needed
+    if comfy_url:
+        raw = json.dumps(api)
+        if "placeholder.png" in raw:
+            ensure_placeholder(comfy_url)
+
     for nid, inputs in (patches or {}).items():
         if str(nid) not in api:
             msg = (f"  [warn] patch targets unknown node {nid} in "
@@ -197,7 +239,7 @@ def run_recipe(comfy_url, recipe_api_json_path, patches, out_path, client_id=Non
     """Load an API-format recipe, apply patches, queue, save the FIRST output to
     out_path. `patches` = {node_id(str): {input_name: value}}."""
     client_id = client_id or uuid.uuid4().hex
-    api = _load_recipe(recipe_api_json_path, patches)
+    api = _load_recipe(recipe_api_json_path, patches, comfy_url=comfy_url)
     pid = queue(comfy_url, api, client_id)
     hist = wait(comfy_url, pid, timeout=timeout)
     imgs = collect_images(hist)
@@ -210,7 +252,7 @@ def run_recipe_audio(comfy_url, recipe_api_json_path, patches, out_path, client_
                      timeout=600):
     """Run a TTS recipe whose output is AUDIO. Saves first audio output to out_path."""
     client_id = client_id or uuid.uuid4().hex
-    api = _load_recipe(recipe_api_json_path, patches)
+    api = _load_recipe(recipe_api_json_path, patches, comfy_url=comfy_url)
     pid = queue(comfy_url, api, client_id)
     hist = wait(comfy_url, pid, timeout=timeout)
     items = collect_audio(hist)
@@ -224,7 +266,7 @@ def run_recipe_text(comfy_url, recipe_api_json_path, patches, client_id=None,
     """Run a recipe whose output is TEXT (e.g. Qwen3-VL). Returns the string from
     the node's history outputs."""
     client_id = client_id or uuid.uuid4().hex
-    api = _load_recipe(recipe_api_json_path, patches, warn_missing=True)
+    api = _load_recipe(recipe_api_json_path, patches, warn_missing=True, comfy_url=comfy_url)
     pid = queue(comfy_url, api, client_id)
     hist = wait(comfy_url, pid, timeout=timeout)
     outs = hist.get("outputs", {}) or {}
