@@ -1,38 +1,37 @@
 {
-  "_readme": [
-    "Kokoro TTS recipe for Stage H (no-reference-audio fallback).",
-    "Required custom node: ComfyUI-Kokoro  (https://github.com/Qodex-Media/ComfyUI-Kokoro)",
-    "   OR: ComfyUI_kokoro  (https://github.com/meanderingstream/ComfyUI_kokoro)",
-    "",
-    "HOW TO USE:",
-    "  1. Load your Kokoro graph in ComfyUI and do Workflow -> Export (API Format).",
-    "  2. Replace this file with that export.",
-    "  3. In archviz_director.py ComfyClient, set kokoro_nodes to match your node IDs:",
-    "       kokoro_nodes = {",
-    "         'text':  '<node_id of text input>',",
-    "         'voice': '<node_id of voice selector, or None>',",
-    "         'save':  '<node_id of SaveAudio node>'",
-    "       }",
-    "",
-    "Recommended voice for a confident female spokesperson: 'af_heart' or 'af_bella'.",
-    "The controller patches: text -> audio_prompt, voice -> kokoro_voice setting."
+  "_node_pack": "comfyui-kokoro (github.com/stavsap/comfyui-kokoro)",
+  "_class_types_used": ["KokoroSpeaker", "KokoroGenerator", "SaveAudio"],
+  "_controller_patches": {
+    "node_1_KokoroSpeaker":   "inputs.speaker_name <- kokoro_voice preset",
+    "node_2_KokoroGenerator": "inputs.text         <- audio_prompt text",
+    "node_3_SaveAudio":       "inputs.filename_prefix <- scene voiceover prefix"
+  },
+  "_note": [
+    "Models and voices download automatically on first ComfyUI run.",
+    "No manual model files needed.",
+    "Good female English voices: af_heart, af_bella, af_nova, bf_emma, bf_alice.",
+    "Change --kokoro-voice CLI flag to switch presets."
   ],
   "1": {
-    "class_type": "KokoroTTS",
+    "class_type": "KokoroSpeaker",
     "inputs": {
-      "text": "Placeholder. Controller patches this with the audio_prompt.",
-      "voice": "af_heart",
-      "speed": 1.0,
-      "language": "en-us"
-    },
-    "_comment": "PATCH TARGETS: text + voice. Controller sets both at runtime."
+      "speaker_name": "af_heart"
+    }
   },
   "2": {
+    "class_type": "KokoroGenerator",
+    "inputs": {
+      "text": "Placeholder. Controller patches this field with the scene audio prompt.",
+      "speaker": ["1", 0],
+      "speed": 1.0,
+      "lang": "English"
+    }
+  },
+  "3": {
     "class_type": "SaveAudio",
     "inputs": {
       "filename_prefix": "voiceover",
-      "audio": ["1", 0]
-    },
-    "_comment": "PATCH TARGET: save node."
+      "audio": ["2", 0]
+    }
   }
 }

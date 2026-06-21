@@ -124,10 +124,12 @@ class ComfyClient:
         # Node-id maps — must match the exported recipe graphs:
         self.qwen_nodes   = {"image": None, "user_prompt": None, "text_out": None}
         self.nb_nodes     = {"prompt": None, "image_1": None, "image_2": None, "save": None}
-        # F5-TTS: set node ids after exporting your graph in API format.
-        self.f5_nodes     = {"text": "2", "ref_audio": "1", "ref_text": None, "save": "3"}
-        # Kokoro TTS fallback: set node ids after exporting.
-        self.kokoro_nodes = {"text": "1", "voice": None, "save": "2"}
+        # F5-TTS node IDs — match f5_tts.json layout:
+        #   "1"=LoadAudio, "2"=F5TTSAudioInputs, "3"=SaveAudio
+        self.f5_nodes     = {"ref_audio": "1", "text": "2", "save": "3"}
+        # Kokoro node IDs — match kokoro_tts.json layout:
+        #   "1"=KokoroSpeaker, "2"=KokoroGenerator, "3"=SaveAudio
+        self.kokoro_nodes = {"voice_node": "1", "text_node": "2", "save": "3"}
         self.kokoro_voice = "af_heart"   # change to preferred Kokoro voice preset
 
     def analyze(self, user_prompt, image_path, system_prompt=""):
@@ -151,31 +153,36 @@ class ComfyClient:
         return self.api.run_recipe(self.url, self.nb_recipe, patches, out_path)
 
     def generate_audio(self, text, ref_audio_path, out_path, voice=None):
-        """Generate voiceover via F5-TTS (with ref) or Kokoro TTS (fallback)."""
+        """Generate voiceover via F5-TTS (with ref) or Kokoro TTS (fallback).
+
+        F5-TTS recipe layout (node IDs from f5_tts.json):
+          "1" LoadAudio        -> patch inputs.audio with uploaded voice_ref filename
+          "2" F5TTSAudioInputs -> patch inputs.speech (gen text) + inputs.sample_text (ref transcript)
+          "3" SaveAudio        -> patch inputs.filename_prefix
+        Kokoro recipe layout (node IDs from kokoro_tts.json):
+          "1" KokoroSpeaker    -> patch inputs.speaker_name
+          "2" KokoroGenerator  -> patch inputs.text
+          "3" SaveAudio        -> patch inputs.filename_prefix
+        """
+        prefix = os.path.splitext(os.path.basename(out_path))[0]
         if ref_audio_path and os.path.isfile(ref_audio_path):
-            # F5-TTS path: upload ref audio, patch text, run.
+            # F5-TTS: upload ref audio, optionally load companion .txt transcript.
             up = self.api.upload_audio(self.url, ref_audio_path)
-            patches = {}
-            if self.f5_nodes.get("ref_audio"):
-                patches[self.f5_nodes["ref_audio"]] = {"audio": up}
-            if self.f5_nodes.get("text"):
-                patches[self.f5_nodes["text"]] = {"gen_text": text}
-            if self.f5_nodes.get("ref_text"):
-                patches[self.f5_nodes["ref_text"]] = {"ref_text": ""}
-            if self.f5_nodes.get("save"):
-                patches[self.f5_nodes["save"]] = {
-                    "filename_prefix": os.path.splitext(os.path.basename(out_path))[0]}
+            ref_txt_path = os.path.splitext(ref_audio_path)[0] + ".txt"
+            ref_text = ID.read_text(ref_txt_path) if os.path.isfile(ref_txt_path) else ""
+            patches = {
+                self.f5_nodes["ref_audio"]: {"audio": up},
+                self.f5_nodes["text"]:      {"speech": text, "sample_text": ref_text},
+                self.f5_nodes["save"]:      {"filename_prefix": prefix},
+            }
             return self.api.run_recipe_audio(self.url, self.f5_recipe, patches, out_path)
         else:
-            # Kokoro fallback: no ref audio needed.
-            patches = {}
-            if self.kokoro_nodes.get("text"):
-                patches[self.kokoro_nodes["text"]] = {"text": text}
-            if self.kokoro_nodes.get("voice"):
-                patches[self.kokoro_nodes["voice"]] = {"voice": voice or self.kokoro_voice}
-            if self.kokoro_nodes.get("save"):
-                patches[self.kokoro_nodes["save"]] = {
-                    "filename_prefix": os.path.splitext(os.path.basename(out_path))[0]}
+            # Kokoro: just text + voice preset.
+            patches = {
+                self.kokoro_nodes["voice_node"]: {"speaker_name": voice or self.kokoro_voice},
+                self.kokoro_nodes["text_node"]:  {"text": text},
+                self.kokoro_nodes["save"]:       {"filename_prefix": prefix},
+            }
             return self.api.run_recipe_audio(self.url, self.kokoro_recipe, patches, out_path)
 
 

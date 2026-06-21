@@ -1,20 +1,17 @@
 {
-  "_readme": [
-    "F5-TTS recipe for Stage H (voice cloning path).",
-    "Required custom node: ComfyUI-F5-TTS  (https://github.com/niknah/ComfyUI-F5-TTS)",
-    "",
-    "HOW TO USE:",
-    "  1. Load your F5-TTS graph in ComfyUI and do Workflow -> Export (API Format).",
-    "  2. Replace this file with that export.",
-    "  3. In archviz_director.py ComfyClient, set f5_nodes to match your node IDs:",
-    "       f5_nodes = {",
-    "         'text':      '<node_id of the text input or primitive>',",
-    "         'ref_audio': '<node_id of LoadAudio node>',",
-    "         'ref_text':  '<node_id of ref_text input, or None>',",
-    "         'save':      '<node_id of SaveAudio node>'",
-    "       }",
-    "",
-    "The controller patches: text -> audio_prompt text, ref_audio -> uploaded voice ref."
+  "_node_pack": "ComfyUI-F5-TTS (github.com/niknah/ComfyUI-F5-TTS)",
+  "_class_types_used": ["LoadAudio", "F5TTSAudioInputs", "SaveAudio"],
+  "_controller_patches": {
+    "node_1_LoadAudio":        "inputs.audio          <- uploaded voice_ref filename",
+    "node_2_F5TTSAudioInputs": "inputs.speech         <- audio_prompt text",
+    "node_2_F5TTSAudioInputs": "inputs.sample_text    <- text spoken in the voice_ref clip",
+    "node_3_SaveAudio":        "inputs.filename_prefix <- scene voiceover prefix"
+  },
+  "_voice_ref_note": [
+    "Place cast/spokesman/voice_ref.wav in the project folder.",
+    "Also create cast/spokesman/voice_ref.txt containing the exact words spoken in that clip.",
+    "F5-TTS uses the text to align the reference — empty string works but lowers quality.",
+    "5-15 seconds of clear speech is ideal for the reference clip."
   ],
   "1": {
     "class_type": "LoadAudio",
@@ -22,29 +19,26 @@
       "audio": "voice_ref.wav",
       "start_time": 0.0,
       "duration": 0.0
-    },
-    "_comment": "PATCH TARGET: ref_audio node. Controller uploads voice_ref.wav here."
+    }
   },
   "2": {
-    "class_type": "F5TTS",
+    "class_type": "F5TTSAudioInputs",
     "inputs": {
-      "model": "F5-TTS",
-      "ref_audio": ["1", 0],
-      "ref_text": "",
-      "gen_text": "Placeholder. Controller patches this with the audio_prompt.",
+      "sample_audio": ["1", 0],
+      "sample_text": "",
+      "speech": "Placeholder. Controller patches this field with the scene audio prompt.",
+      "seed": 1,
+      "model": "F5v1",
+      "vocoder": "auto",
       "speed": 1.0,
-      "nfe_step": 32,
-      "cross_fade_duration": 0.15,
-      "fix_duration": -1
-    },
-    "_comment": "PATCH TARGET: text node. Controller sets gen_text to audio_prompt."
+      "model_type": "F5TTS_Base"
+    }
   },
   "3": {
     "class_type": "SaveAudio",
     "inputs": {
       "filename_prefix": "voiceover",
       "audio": ["2", 0]
-    },
-    "_comment": "PATCH TARGET: save node. Controller sets filename_prefix to scene id."
+    }
   }
 }
