@@ -149,6 +149,12 @@ class ComfyClient:
         #                        "3"=GeminiNanoBanana2V2  "4"=SaveImage
         self.qwen_nodes   = {"image": "1", "user_prompt": "2", "text_out": "3"}
         self.nb_nodes     = {"prompt": "3", "image_1": "1", "image_2": "2", "save": "4"}
+        # API-node auth + model selection (set from the GUI / CLI).
+        #   api_token   -> sent as extra_data.api_key_comfy_org so Gemini/NanoBanana
+        #                  can authenticate without a logged-in ComfyOrg session.
+        #   image_model -> patched into the GeminiNanoBanana2V2 'model' input.
+        self.api_token   = ""
+        self.image_model = "Nano Banana 2 (Gemini 3.1 Flash Image)"
         # Qwen model paths — set from CLI or defaults from ClaudeImageGen.json workflow
         _llm = r"C:\Users\oranbenshaprut\Documents\ComfyUI\models\LLM"
         self.qwen_model_path  = os.path.join(_llm, "Qwen3VL-8B-Instruct-Q8_0.gguf")
@@ -173,6 +179,10 @@ class ComfyClient:
             "save":      "273",
         }
 
+    def _extra(self):
+        """extra_data for /prompt so API nodes can authenticate. None if no token."""
+        return {"api_key_comfy_org": self.api_token} if self.api_token else None
+
     def analyze(self, user_prompt, image_path, system_prompt=""):
         up = self.api.upload_image(self.url, image_path)
         n = self.qwen_nodes
@@ -188,17 +198,21 @@ class ComfyClient:
             n["user_prompt"]: qwen_patch,
         }
         return self.api.run_recipe_text(self.url, self.qwen_recipe, patches,
-                                        text_node=n["text_out"])
+                                        text_node=n["text_out"], extra_data=self._extra())
 
     def generate(self, prompt, ref_paths, out_path):
         patches = {}
         if self.nb_nodes["prompt"]:
-            patches[self.nb_nodes["prompt"]] = {"prompt": prompt}
+            nb_patch = {"prompt": prompt}
+            if self.image_model:
+                nb_patch["model"] = self.image_model
+            patches[self.nb_nodes["prompt"]] = nb_patch
         for slot, key in (("image_1", "image_1"), ("image_2", "image_2")):
             if self.nb_nodes.get(slot) and ref_paths:
                 up = self.api.upload_image(self.url, ref_paths.pop(0))
                 patches[self.nb_nodes[slot]] = {"image": up}
-        return self.api.run_recipe(self.url, self.nb_recipe, patches, out_path)
+        return self.api.run_recipe(self.url, self.nb_recipe, patches, out_path,
+                                   extra_data=self._extra())
 
     def generate_audio(self, text, ref_audio_path, out_path, voice=None):
         """Generate voiceover via F5-TTS (with ref) or Kokoro TTS (fallback).
@@ -223,7 +237,8 @@ class ComfyClient:
                 self.f5_nodes["text"]:      {"speech": text, "sample_text": ref_text},
                 self.f5_nodes["save"]:      {"filename_prefix": prefix},
             }
-            return self.api.run_recipe_audio(self.url, self.f5_recipe, patches, out_path)
+            return self.api.run_recipe_audio(self.url, self.f5_recipe, patches, out_path,
+                                             extra_data=self._extra())
         else:
             # Kokoro: just text + voice preset.
             patches = {
@@ -231,7 +246,8 @@ class ComfyClient:
                 self.kokoro_nodes["text_node"]:  {"text": text},
                 self.kokoro_nodes["save"]:       {"filename_prefix": prefix},
             }
-            return self.api.run_recipe_audio(self.url, self.kokoro_recipe, patches, out_path)
+            return self.api.run_recipe_audio(self.url, self.kokoro_recipe, patches, out_path,
+                                             extra_data=self._extra())
 
     def generate_director_video(self, frames_folder, segment_index, out_dir):
         """Stage M (director mode): queue ClaudeVideoGen_AIDirector workflow for one segment.
@@ -256,7 +272,7 @@ class ComfyClient:
         }
         return self.api.run_recipe_video(
             self.url, self.director_recipe, patches, out_path,
-            timeout=3600, video_node="372")
+            timeout=3600, video_node="372", extra_data=self._extra())
 
     def generate_video(self, positive, negative, hero_path, voiceover_path,
                        duration_secs, out_path, prefix="scene"):
@@ -281,7 +297,8 @@ class ComfyClient:
             n["save"]:     {"filename_prefix": prefix},
         }
         return self.api.run_recipe_video(
-            self.url, self.lipsync_recipe, patches, out_path, timeout=3600)
+            self.url, self.lipsync_recipe, patches, out_path, timeout=3600,
+            extra_data=self._extra())
 
 
 # --------------------------------------------------------------------------- #
@@ -876,6 +893,12 @@ def main():
     ap.add_argument("--qwen-mmproj-path",
                     default=r"C:\Users\oranbenshaprut\Documents\ComfyUI\models\LLM\mmproj-Qwen3VL-8B-Instruct-F16.gguf",
                     help="path to Qwen3-VL mmproj GGUF file")
+    ap.add_argument("--api-token", default="",
+                    help="ComfyOrg API key for paid API nodes (Gemini/NanoBanana). "
+                         "Sent as extra_data.api_key_comfy_org. Leave empty if ComfyUI "
+                         "is already logged in to a ComfyOrg account.")
+    ap.add_argument("--image-model", default="Nano Banana 2 (Gemini 3.1 Flash Image)",
+                    help="model selected on the GeminiNanoBanana2V2 node.")
     # --- Director mode (uses ClaudeVideoGen_AIDirector workflow) ---
     ap.add_argument("--director-frames", default="",
                     help="path to Unreal Engine frames folder — activates director mode "
@@ -899,6 +922,8 @@ def main():
         client = ComfyClient(args.comfy_url, args.recipes)
         client.qwen_model_path  = args.qwen_model_path
         client.qwen_mmproj_path = args.qwen_mmproj_path
+        client.api_token   = args.api_token
+        client.image_model = args.image_model
         # Override director recipe path if explicitly specified
         if args.director_recipe:
             client.director_recipe = args.director_recipe

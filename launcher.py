@@ -94,15 +94,20 @@ class App(tk.Tk):
         self.var_voice = tk.StringVar(value="af_heart")
         self.var_compose = tk.StringVar(value="hard_cut_reencode")
         self.var_dryrun = tk.BooleanVar(value=False)
+        self.var_token = tk.StringVar()
+        self.var_model = tk.StringVar(value="Nano Banana 2 (Gemini 3.1 Flash Image)")
 
         self._running = False
         self._stop_flag = False
         self._thumb_refs = []          # keep PhotoImage refs alive
         self._client_cache = {}
 
+        self._load_settings()
         self._build_status_bar()
         self._build_tabs()
         self._poll_comfyui_status()
+        self._fetch_model_options()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ── status bar ───────────────────────────────────────────────────────
     def _build_status_bar(self):
@@ -158,6 +163,23 @@ class App(tk.Tk):
         ttk.Checkbutton(opts, text="Dry-run (offline scaffold)",
                         variable=self.var_dryrun).grid(
             row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
+
+        # API token + image model (for Gemini / NanoBanana API nodes)
+        tk.Label(opts, text="API token:").grid(row=2, column=0, sticky="w", pady=(8, 0))
+        self.ent_token = ttk.Entry(opts, textvariable=self.var_token, width=34, show="\u2022")
+        self.ent_token.grid(row=2, column=1, columnspan=2, sticky="we", padx=(4, 6), pady=(8, 0))
+        self._token_shown = False
+        ttk.Button(opts, text="show", width=5,
+                   command=self._toggle_token).grid(row=2, column=3, sticky="w", pady=(8, 0))
+
+        tk.Label(opts, text="Image model:").grid(row=2, column=4, sticky="w", pady=(8, 0))
+        self.cmb_model = ttk.Combobox(opts, textvariable=self.var_model, width=30,
+                                      values=[self.var_model.get()])
+        self.cmb_model.grid(row=2, column=5, sticky="w", padx=4, pady=(8, 0))
+
+        tk.Label(opts, text="(token only needed if ComfyUI is not logged in to a "
+                            "ComfyOrg account)", fg="#888").grid(
+            row=3, column=0, columnspan=6, sticky="w", pady=(2, 0))
 
         btns = tk.Frame(p)
         btns.pack(fill="x", padx=12, pady=6)
@@ -326,14 +348,15 @@ class App(tk.Tk):
     # ── regenerate a single element ──────────────────────────────────────
     def _make_client(self, dry):
         key = "dry" if dry else "live"
-        if key in self._client_cache:
-            return self._client_cache[key]
         mod = load_pipeline()
-        if dry:
-            client = mod.DryRunClient()
-        else:
-            client = mod.ComfyClient(COMFYUI_URL, RECIPES_DIR)
-        self._client_cache[key] = client
+        client = self._client_cache.get(key)
+        if client is None:
+            client = mod.DryRunClient() if dry else mod.ComfyClient(COMFYUI_URL, RECIPES_DIR)
+            self._client_cache[key] = client
+        if not dry:
+            # always apply the latest token / model from the GUI
+            client.api_token = self.var_token.get().strip()
+            client.image_model = self.var_model.get().strip() or client.image_model
         return client
 
     def _regen(self, meta):
@@ -408,6 +431,70 @@ class App(tk.Tk):
                 return
         self.after(0, self._log, "[err] ComfyUI did not start within 2 minutes.\n", "err")
 
+    # ── token / model / settings ─────────────────────────────────────────
+    def _toggle_token(self):
+        self._token_shown = not self._token_shown
+        self.ent_token.config(show="" if self._token_shown else "\u2022")
+
+    def _fetch_model_options(self):
+        """Populate the model dropdown live from the GeminiNanoBanana2V2 node."""
+        def work():
+            try:
+                import json as _json
+                url = f"{COMFYUI_URL}/object_info/GeminiNanoBanana2V2"
+                info = _json.loads(urllib.request.urlopen(url, timeout=6).read())
+                node = info["GeminiNanoBanana2V2"]
+                spec = node["input"]["required"]["model"][1]
+                opts = [o["key"] for o in spec.get("options", []) if "key" in o]
+                if opts:
+                    self.after(0, lambda: self.cmb_model.config(values=opts))
+                    if self.var_model.get() not in opts:
+                        self.after(0, lambda: self.var_model.set(opts[0]))
+            except Exception:
+                pass   # offline / node missing — keep the default value
+        threading.Thread(target=work, daemon=True).start()
+
+    def _settings_path(self):
+        return os.path.join(os.path.expanduser("~"), ".archviz_director.json")
+
+    def _load_settings(self):
+        try:
+            import json as _json
+            with open(self._settings_path(), encoding="utf-8") as fh:
+                s = _json.load(fh)
+            self.var_project.set(s.get("project", ""))
+            self.var_frames.set(s.get("frames", ""))
+            self.var_director_frames.set(s.get("director_frames", ""))
+            self.var_phases.set(s.get("phases", "1,2,3,4,5"))
+            self.var_voice.set(s.get("voice", "af_heart"))
+            self.var_compose.set(s.get("compose", "hard_cut_reencode"))
+            self.var_token.set(s.get("token", ""))
+            self.var_model.set(s.get("model", "Nano Banana 2 (Gemini 3.1 Flash Image)"))
+        except Exception:
+            pass
+
+    def _save_settings(self):
+        try:
+            import json as _json
+            data = {
+                "project": self.var_project.get(),
+                "frames": self.var_frames.get(),
+                "director_frames": self.var_director_frames.get(),
+                "phases": self.var_phases.get(),
+                "voice": self.var_voice.get(),
+                "compose": self.var_compose.get(),
+                "token": self.var_token.get(),
+                "model": self.var_model.get(),
+            }
+            with open(self._settings_path(), "w", encoding="utf-8") as fh:
+                _json.dump(data, fh, indent=2)
+        except Exception:
+            pass
+
+    def _on_close(self):
+        self._save_settings()
+        self.destroy()
+
     # ── pipeline runner (in-process, live log) ───────────────────────────
     def _build_argv(self):
         project = self.var_project.get().strip()
@@ -423,6 +510,10 @@ class App(tk.Tk):
                 "--phases", self.var_phases.get().strip() or "1,2,3,4,5",
                 "--kokoro-voice", self.var_voice.get().strip() or "af_heart",
                 "--compose-mode", self.var_compose.get().strip()]
+        if self.var_model.get().strip():
+            argv += ["--image-model", self.var_model.get().strip()]
+        if self.var_token.get().strip():
+            argv += ["--api-token", self.var_token.get().strip()]
         df = self.var_director_frames.get().strip()
         if df:
             argv += ["--director-frames", df]
@@ -442,6 +533,7 @@ class App(tk.Tk):
         argv = self._build_argv()
         if argv is None:
             return
+        self._save_settings()
         self._log("[info] Starting pipeline\u2026\n", "info")
         self._log(" ".join(f'"{a}"' if " " in a else a for a in argv) + "\n", "info")
         self._log("\u2500" * 60 + "\n")

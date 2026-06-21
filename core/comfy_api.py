@@ -60,10 +60,13 @@ def upload_image(comfy_url, filepath, overwrite=True):
 
 _PLACEHOLDER_UPLOADED: set = set()   # per-process cache of URLs already seeded
 
-# Minimal 1×1 white PNG (valid image, smallest possible)
+# 64×64 white PNG. A 1×1 image makes some LoadImage builds crash inside PyAV
+# ("avcodec_send_packet()"), so we keep it comfortably sized.
 _PLACEHOLDER_PNG_B64 = (
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQ"
-    "AABjkB6QAAAABJRU5ErkJggg=="
+    "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAfElEQVR4nNXOQREAIADDsFL/no"
+    "cIHlyjIGcbZRIncRIncRIncRIncRIncRIncRIncRIncRIncRIncRIncRIncRIncRIncRIncRIn"
+    "cRIncRIncRIncRIncRIncRIncRIncRIncRIncRIncRIncRIncRIncRIncRIncf4OvLpyqgN9ZS"
+    "iDcwAAAABJRU5ErkJggg=="
 )
 
 
@@ -89,10 +92,24 @@ def ensure_placeholder(comfy_url):
             pass
 
 
-def queue(comfy_url, api_prompt, client_id):
-    out = _post_json(comfy_url.rstrip("/") + "/prompt",
-                     {"prompt": api_prompt, "client_id": client_id})
+def queue(comfy_url, api_prompt, client_id, extra_data=None):
+    payload = {"prompt": api_prompt, "client_id": client_id}
+    if extra_data:
+        # e.g. {"api_key_comfy_org": "<token>"} so API nodes (Gemini/NanoBanana)
+        # can authenticate without a logged-in ComfyOrg session.
+        payload["extra_data"] = extra_data
+    out = _post_json(comfy_url.rstrip("/") + "/prompt", payload)
     return out["prompt_id"]
+
+
+def _error_detail(status):
+    """Pull a human-readable node error out of a history status block."""
+    for m in status.get("messages", []) or []:
+        if m and m[0] == "execution_error":
+            d = m[1] or {}
+            return (f"{d.get('node_type', '?')} (node {d.get('node_id', '?')}): "
+                    f"{d.get('exception_message', '').strip()}")
+    return status.get("status_str", "unknown error")
 
 
 def wait(comfy_url, prompt_id, timeout=1800, poll=2.0):
@@ -104,9 +121,14 @@ def wait(comfy_url, prompt_id, timeout=1800, poll=2.0):
         except urllib.error.URLError:
             h = {}
         if prompt_id in h:
-            st = h[prompt_id].get("status", {})
-            if st.get("completed", True):
-                return h[prompt_id]
+            entry = h[prompt_id]
+            st = entry.get("status", {})
+            status_str = st.get("status_str")
+            if status_str == "error":
+                # Fail fast with the real node error instead of hanging to timeout.
+                raise RuntimeError("ComfyUI execution error \u2014 " + _error_detail(st))
+            if status_str == "success" or st.get("completed") or entry.get("outputs"):
+                return entry
         time.sleep(poll)
     raise TimeoutError(f"recipe timed out after {timeout}s")
 
@@ -175,7 +197,7 @@ def collect_videos(history, video_node=None):
 
 
 def run_recipe_video(comfy_url, recipe_api_json_path, patches, out_path, client_id=None,
-                     timeout=3600, video_node=None):
+                     timeout=3600, video_node=None, extra_data=None):
     """Run an LTX / video recipe. Saves the video output to out_path (.mp4).
 
     video_node: if set, only collect output from that specific node ID (e.g. '372').
@@ -184,7 +206,7 @@ def run_recipe_video(comfy_url, recipe_api_json_path, patches, out_path, client_
     """
     client_id = client_id or uuid.uuid4().hex
     api = _load_recipe(recipe_api_json_path, patches, warn_missing=True, comfy_url=comfy_url)
-    pid = queue(comfy_url, api, client_id)
+    pid = queue(comfy_url, api, client_id, extra_data=extra_data)
     hist = wait(comfy_url, pid, timeout=timeout)
     items = collect_videos(hist, video_node=video_node)
     if not items and video_node:
@@ -235,12 +257,12 @@ def collect_images(history):
 
 
 def run_recipe(comfy_url, recipe_api_json_path, patches, out_path, client_id=None,
-               timeout=1800):
+               timeout=1800, extra_data=None):
     """Load an API-format recipe, apply patches, queue, save the FIRST output to
     out_path. `patches` = {node_id(str): {input_name: value}}."""
     client_id = client_id or uuid.uuid4().hex
     api = _load_recipe(recipe_api_json_path, patches, comfy_url=comfy_url)
-    pid = queue(comfy_url, api, client_id)
+    pid = queue(comfy_url, api, client_id, extra_data=extra_data)
     hist = wait(comfy_url, pid, timeout=timeout)
     imgs = collect_images(hist)
     if not imgs:
@@ -249,11 +271,11 @@ def run_recipe(comfy_url, recipe_api_json_path, patches, out_path, client_id=Non
 
 
 def run_recipe_audio(comfy_url, recipe_api_json_path, patches, out_path, client_id=None,
-                     timeout=600):
+                     timeout=600, extra_data=None):
     """Run a TTS recipe whose output is AUDIO. Saves first audio output to out_path."""
     client_id = client_id or uuid.uuid4().hex
     api = _load_recipe(recipe_api_json_path, patches, comfy_url=comfy_url)
-    pid = queue(comfy_url, api, client_id)
+    pid = queue(comfy_url, api, client_id, extra_data=extra_data)
     hist = wait(comfy_url, pid, timeout=timeout)
     items = collect_audio(hist)
     if not items:
@@ -262,12 +284,12 @@ def run_recipe_audio(comfy_url, recipe_api_json_path, patches, out_path, client_
 
 
 def run_recipe_text(comfy_url, recipe_api_json_path, patches, client_id=None,
-                    timeout=600, text_node=None):
+                    timeout=600, text_node=None, extra_data=None):
     """Run a recipe whose output is TEXT (e.g. Qwen3-VL). Returns the string from
     the node's history outputs."""
     client_id = client_id or uuid.uuid4().hex
     api = _load_recipe(recipe_api_json_path, patches, warn_missing=True, comfy_url=comfy_url)
-    pid = queue(comfy_url, api, client_id)
+    pid = queue(comfy_url, api, client_id, extra_data=extra_data)
     hist = wait(comfy_url, pid, timeout=timeout)
     outs = hist.get("outputs", {}) or {}
     # Prefer a named node; else scan for any string-like output.
