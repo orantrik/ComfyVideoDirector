@@ -116,10 +116,16 @@ def collect_audio(history):
     return out
 
 
-def collect_videos(history):
-    """Collect video output items (SaveVideo / VHS_VideoCombine) from job history."""
+def collect_videos(history, video_node=None):
+    """Collect video output items (SaveVideo / VHS_VideoCombine) from job history.
+
+    If video_node is given (e.g. '372'), only that node's outputs are returned.
+    Otherwise all nodes' video outputs are returned (first = earliest node).
+    """
     out = []
-    for _node, data in (history.get("outputs", {}) or {}).items():
+    for node_id, data in (history.get("outputs", {}) or {}).items():
+        if video_node and str(node_id) != str(video_node):
+            continue
         for key in ("gifs", "videos"):
             for item in data.get(key, []) or []:
                 out.append(item)
@@ -127,17 +133,27 @@ def collect_videos(history):
 
 
 def run_recipe_video(comfy_url, recipe_api_json_path, patches, out_path, client_id=None,
-                     timeout=3600):
-    """Run an LTX / video recipe. Saves first video output to out_path (.mp4)."""
+                     timeout=3600, video_node=None):
+    """Run an LTX / video recipe. Saves the video output to out_path (.mp4).
+
+    video_node: if set, only collect output from that specific node ID (e.g. '372').
+    When multiple SaveVideo nodes exist (draft + final), use this to target the final one.
+    Unknown patch node IDs are silently skipped (warning only) to allow partial patching.
+    """
     client_id = client_id or uuid.uuid4().hex
     api = json.load(open(recipe_api_json_path, encoding="utf-8"))
     for nid, inputs in (patches or {}).items():
         if str(nid) not in api:
-            raise KeyError(f"recipe {os.path.basename(recipe_api_json_path)} has no node id {nid}")
+            print(f"  [warn] patch targets unknown node {nid} in "
+                  f"{os.path.basename(recipe_api_json_path)} — skipping")
+            continue
         api[str(nid)].setdefault("inputs", {}).update(inputs)
     pid = queue(comfy_url, api, client_id)
     hist = wait(comfy_url, pid, timeout=timeout)
-    items = collect_videos(hist)
+    items = collect_videos(hist, video_node=video_node)
+    if not items and video_node:
+        # Fallback: collect from any node if the specified one had no output
+        items = collect_videos(hist)
     if not items:
         raise RuntimeError(f"video recipe produced no output (prompt {pid})")
     return _download(comfy_url, items[0], out_path)

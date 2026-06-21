@@ -116,6 +116,15 @@ class DryRunClient:
         print(f"    [dry-run video] LTX-2 lip-sync -> {os.path.basename(out_path)}")
         return out_path
 
+    def generate_director_video(self, frames_folder, segment_index, out_dir):
+        """Dry-run placeholder for the director video stage."""
+        os.makedirs(out_dir, exist_ok=True)
+        out = os.path.join(out_dir, "scene_video.mp4")
+        with open(out, "wb") as fh:
+            fh.write(b"DRY\n")
+        print(f"    [dry-run director] segment {segment_index} -> {os.path.basename(out)}")
+        return out
+
 
 class ComfyClient:
     label = "comfyui"
@@ -130,7 +139,10 @@ class ComfyClient:
         self.nb_recipe      = os.path.join(recipes_dir, "nanobanana_gen.json")
         self.f5_recipe      = os.path.join(recipes_dir, "f5_tts.json")
         self.kokoro_recipe  = os.path.join(recipes_dir, "kokoro_tts.json")
-        self.lipsync_recipe = os.path.join(recipes_dir, "lipsync_scene.json")
+        self.lipsync_recipe  = os.path.join(recipes_dir, "lipsync_scene.json")
+        # Director recipe: the converted ClaudeVideoGen_AIDirector.json workflow.
+        # Activates when --director-frames is supplied.
+        self.director_recipe = os.path.join(recipes_dir, "ltx_director_scene.json")
         # Node-id maps — match qwen_analyze.json and nanobanana_gen.json layouts:
         #   qwen_analyze.json:   "1"=LoadImage  "2"=SimpleQwenVLgguf  "3"=SaveText
         #   nanobanana_gen.json: "1"=LoadImage(ref1) "2"=LoadImage(ref2)
@@ -219,6 +231,31 @@ class ComfyClient:
                 self.kokoro_nodes["save"]:       {"filename_prefix": prefix},
             }
             return self.api.run_recipe_audio(self.url, self.kokoro_recipe, patches, out_path)
+
+    def generate_director_video(self, frames_folder, segment_index, out_dir):
+        """Stage M (director mode): queue ClaudeVideoGen_AIDirector workflow for one segment.
+
+        Patch map (matches ltx_director_scene.json / ClaudeVideoGen_AIDirector.json):
+          Node "438" AIDirectorProjectSetup  -> inputs.project_name
+          Node "439" UnrealFrameIntake       -> inputs.selected_frames_folder
+          Node "444" SegmentPromptPicker     -> inputs.segment_index, save_prefix_base
+          Node "274" / "275" RandomNoise     -> inputs.noise_seed  (randomised each run)
+        The final output video is emitted by SaveVideo node "372".
+        """
+        import random as _rng
+        out_path = os.path.join(out_dir, "scene_video.mp4")
+        patches = {
+            "439": {"selected_frames_folder": str(frames_folder)},
+            "444": {
+                "segment_index":   segment_index,
+                "save_prefix_base": f"scene_{segment_index:02d}",
+            },
+            "274": {"noise_seed": _rng.randint(0, 2 ** 31)},
+            "275": {"noise_seed": _rng.randint(0, 2 ** 31)},
+        }
+        return self.api.run_recipe_video(
+            self.url, self.director_recipe, patches, out_path,
+            timeout=3600, video_node="372")
 
     def generate_video(self, positive, negative, hero_path, voiceover_path,
                        duration_secs, out_path, prefix="scene"):
@@ -426,15 +463,35 @@ def _audio_duration_secs(wav_path):
     return 8.0   # safe default
 
 
-def stage_video(root, n, client):
-    """Stage M: generate the lip-sync video from hero_locked.png + voiceover.wav."""
+def stage_video(root, n, client, director_frames=""):
+    """Stage M: generate the scene video.
+
+    Director mode (when director_frames is set):
+        Queues the full ClaudeVideoGen_AIDirector workflow for this segment.
+        ComfyUI's AI Director nodes handle frame analysis, prompts and audio
+        internally — the GUI workflow in the browser controls all quality knobs.
+
+    LipSync mode (default):
+        Uploads the locked hero image + Kokoro/F5 voiceover and runs the
+        LTX-2 lip-sync recipe.
+    """
     d = ID.scene_dir(root, n)
+
+    if director_frames and hasattr(client, "generate_director_video"):
+        renders = os.path.join(d, "renders")
+        os.makedirs(renders, exist_ok=True)
+        out_path = os.path.join(renders, "scene_video.mp4")
+        client.generate_director_video(director_frames, n, renders)
+        ID.register_video(root, n, out_path)
+        print(f"  video done [LTX Director] -> renders/scene_video.mp4 (Stage M)")
+        return out_path
+
+    # --- LipSync (original) path ---
     hero      = os.path.join(d, "renders", "hero_locked.png")
     voiceover = os.path.join(d, "audio", "voiceover.wav")
     positive  = ID.read_text(os.path.join(d, "prompts", "positive.txt"), "")
     negative  = ID.read_text(os.path.join(d, "prompts", "negative.txt"), "")
 
-    # Graceful fallback when upstream stages are skipped (re-run Phase 4 only).
     if not os.path.isfile(hero):
         hero = os.path.join(d, "source.png")
     if not positive:
@@ -609,7 +666,7 @@ def stage_lock_hero(root, n, variations, best_idx, report):
 #  Scene runner (phases 1–4)
 # --------------------------------------------------------------------------- #
 def run_scene(root, n, src, client, phases=(1, 2, 3, 4),
-              _kokoro_voice="af_heart", prev_master=""):
+              _kokoro_voice="af_heart", prev_master="", director_frames=""):
     print(f"\n=== SCENE {n} ({client.label}) ===")
 
     if 1 in phases:
@@ -658,7 +715,7 @@ def run_scene(root, n, src, client, phases=(1, 2, 3, 4),
         stage_lock_hero(root, n, variations, best_idx, report)
 
     if 4 in phases:
-        stage_video(root, n, client)
+        stage_video(root, n, client, director_frames=director_frames)
 
     return {"furniture": furniture, "objects": objects, "space": space,
             "master": master}
@@ -814,10 +871,18 @@ def main():
                          "(default: <project>/final_film.mp4)")
     ap.add_argument("--qwen-model-path",
                     default="H:\\Qwen3VL-8B-Instruct-Q8_0.gguf",
-                    help="path to Qwen3-VL GGUF model file (default: H:\\Qwen3VL-8B-Instruct-Q8_0.gguf)")
+                    help="path to Qwen3-VL GGUF model file")
     ap.add_argument("--qwen-mmproj-path",
                     default="H:\\mmproj-Qwen3VL-8B-Instruct-F16.gguf",
-                    help="path to Qwen3-VL mmproj GGUF file (default: H:\\mmproj-Qwen3VL-8B-Instruct-F16.gguf)")
+                    help="path to Qwen3-VL mmproj GGUF file")
+    # --- Director mode (uses ClaudeVideoGen_AIDirector workflow) ---
+    ap.add_argument("--director-frames", default="",
+                    help="path to Unreal Engine frames folder — activates director mode "
+                         "for Phase 4. The full ClaudeVideoGen_AIDirector workflow runs in "
+                         "ComfyUI; all quality knobs are set in the GUI workflow.")
+    ap.add_argument("--director-recipe", default="",
+                    help="path to ltx_director_scene.json "
+                         "(default: <recipes-dir>/ltx_director_scene.json)")
     args = ap.parse_args()
 
     phases = set(int(p.strip()) for p in args.phases.split(",") if p.strip())
@@ -833,6 +898,9 @@ def main():
         client = ComfyClient(args.comfy_url, args.recipes)
         client.qwen_model_path  = args.qwen_model_path
         client.qwen_mmproj_path = args.qwen_mmproj_path
+        # Override director recipe path if explicitly specified
+        if args.director_recipe:
+            client.director_recipe = args.director_recipe
 
     if 1 in phases:
         stage_cast(args.project, cast_spec, client)
@@ -848,11 +916,19 @@ def main():
     else:
         scene_nums = list(range(1, len(frames) + 1))
 
+    # Director mode: use the full ComfyUI AI-Director + LTX-2.3 workflow for Phase 4.
+    # The GUI workflow (open in browser) controls all quality knobs; Python only
+    # loops segments and patches the frames folder + segment index.
+    director_frames = args.director_frames
+    if director_frames:
+        print(f"[director mode] frames folder: {director_frames}")
+
     prev_master = ""
     scene_phases = phases - {5}   # phases 1-4 run per scene; 5 is post-loop
     for n, src in zip(scene_nums, frames):
         result = run_scene(args.project, n, src, client, phases=scene_phases,
-                           _kokoro_voice=args.kokoro_voice, prev_master=prev_master)
+                           _kokoro_voice=args.kokoro_voice, prev_master=prev_master,
+                           director_frames=director_frames)
         prev_master = result.get("master", "")
 
     if 5 in phases:
