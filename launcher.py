@@ -94,6 +94,9 @@ class App(tk.Tk):
         self.var_voice = tk.StringVar(value="af_heart")
         self.var_compose = tk.StringVar(value="hard_cut_reencode")
         self.var_scene_type = tk.StringVar(value="exterior")
+        self.var_inspect = tk.StringVar(value="fast")
+        self.var_maxpackshots = tk.StringVar(value="8")
+        self.var_herovars = tk.StringVar(value="4")
         self.var_dryrun = tk.BooleanVar(value=False)
         self.var_token = tk.StringVar()
         self.var_model = tk.StringVar(value="Nano Banana 2 (Gemini 3.1 Flash Image)")
@@ -186,6 +189,23 @@ class App(tk.Tk):
         tk.Label(opts, text="(token only needed if ComfyUI is not logged in to a "
                             "ComfyOrg account)", fg="#888").grid(
             row=3, column=0, columnspan=6, sticky="w", pady=(2, 0))
+
+        # Cost controls — each NanoBanana/Gemini call costs API credits.
+        cost = ttk.LabelFrame(p, text="  Cost controls (API credits)  ", padding=10)
+        cost.pack(fill="x", padx=12, pady=4)
+        tk.Label(cost, text="QA inspect:").grid(row=0, column=0, sticky="w")
+        ttk.Combobox(cost, textvariable=self.var_inspect, width=8,
+                     values=["off", "fast", "full"], state="readonly").grid(
+            row=0, column=1, sticky="w", padx=(4, 18))
+        tk.Label(cost, text="Max packshots:").grid(row=0, column=2, sticky="w")
+        ttk.Entry(cost, textvariable=self.var_maxpackshots, width=6).grid(
+            row=0, column=3, sticky="w", padx=(4, 18))
+        tk.Label(cost, text="Hero variations:").grid(row=0, column=4, sticky="w")
+        ttk.Entry(cost, textvariable=self.var_herovars, width=6).grid(
+            row=0, column=5, sticky="w", padx=4)
+        tk.Label(cost, text="off = no QA scoring (cheapest) \u00b7 fast = 1 call/variation "
+                            "\u00b7 full = 1 call/element (most $$)", fg="#888").grid(
+            row=1, column=0, columnspan=6, sticky="w", pady=(2, 0))
 
         btns = tk.Frame(p)
         btns.pack(fill="x", padx=12, pady=6)
@@ -479,6 +499,9 @@ class App(tk.Tk):
             self.var_voice.set(s.get("voice", "af_heart"))
             self.var_compose.set(s.get("compose", "hard_cut_reencode"))
             self.var_scene_type.set(s.get("scene_type", "exterior"))
+            self.var_inspect.set(s.get("inspect", "fast"))
+            self.var_maxpackshots.set(str(s.get("max_packshots", "8")))
+            self.var_herovars.set(str(s.get("hero_variations", "4")))
             self.var_token.set(s.get("token", ""))
             self.var_model.set(s.get("model", "Nano Banana 2 (Gemini 3.1 Flash Image)"))
         except Exception:
@@ -495,6 +518,9 @@ class App(tk.Tk):
                 "voice": self.var_voice.get(),
                 "compose": self.var_compose.get(),
                 "scene_type": self.var_scene_type.get(),
+                "inspect": self.var_inspect.get(),
+                "max_packshots": self.var_maxpackshots.get(),
+                "hero_variations": self.var_herovars.get(),
                 "token": self.var_token.get(),
                 "model": self.var_model.get(),
             }
@@ -522,7 +548,10 @@ class App(tk.Tk):
                 "--phases", self.var_phases.get().strip() or "1,2,3,4,5",
                 "--kokoro-voice", self.var_voice.get().strip() or "af_heart",
                 "--compose-mode", self.var_compose.get().strip(),
-                "--scene-type", self.var_scene_type.get().strip() or "exterior"]
+                "--scene-type", self.var_scene_type.get().strip() or "exterior",
+                "--inspect-mode", self.var_inspect.get().strip() or "fast",
+                "--max-packshots", (self.var_maxpackshots.get().strip() or "8"),
+                "--hero-variations", (self.var_herovars.get().strip() or "4")]
         if self.var_model.get().strip():
             argv += ["--image-model", self.var_model.get().strip()]
         if self.var_token.get().strip():

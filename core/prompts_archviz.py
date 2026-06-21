@@ -210,6 +210,19 @@ MASTER_PROMPT_EXT = (
 )
 
 
+INSPECTOR_HOLISTIC = (
+    "You are a QA inspector for an architectural composite image. Compare the "
+    "GENERATED image against the locked INVENTORY of elements that should appear "
+    "(each with a short description). Give ONE overall fidelity score from 0 to 100 "
+    "for how faithfully the generated image preserves the real scene and the listed "
+    "identities (100 = perfect, 0 = unrelated/hallucinated). Also list obvious "
+    "hallucinations \u2014 prominent objects or people that appear but are NOT in the "
+    "inventory. Return strict JSON only: "
+    '{{"score": <int>, "hallucinations": [...], "notes": "..."}}\n\n'
+    "INVENTORY:\n{inventory}\n"
+)
+
+
 def apply_scene_type(scene_type):
     """Repoint the active analysis/packshot/master prompts for the given scene type.
 

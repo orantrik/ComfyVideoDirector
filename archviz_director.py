@@ -41,6 +41,36 @@ _PLACEHOLDER_PNG = base64.b64decode(
 )
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
 
+# --------------------------------------------------------------------------- #
+#  Cost controls — every NanoBanana / Gemini call costs API credits, so cap the
+#  expensive per-element work. Tuned in main() from CLI flags.
+#    max_packshots : max number of element packshots to generate per scene
+#    inspect_mode  : "off"  -> skip QA scoring (0 Gemini calls; pick hero_v1)
+#                    "fast" -> 1 holistic Gemini call per hero variation
+#                    "full" -> 1 Gemini call per element per variation (most $$)
+#    hero_variations : how many hero composites to generate (each = 1 NanoBanana)
+#    skip_clutter  : in exterior mode, don't packshot trivial site clutter
+# --------------------------------------------------------------------------- #
+LIMITS = {
+    "max_packshots":   8,
+    "inspect_mode":    "fast",
+    "hero_variations": 4,
+    "skip_clutter":    True,
+}
+
+# Names/keywords that aren't worth a dedicated identity packshot (exterior clutter).
+_CLUTTER_KEYWORDS = (
+    "parking", "lot", "asphalt", "pavement", "road", "street", "kerb", "curb",
+    "sidewalk", "lane marking", "white line", "painted line", "sky", "cloud",
+    "ground", "grass", "lawn", "planter", "shrub", "bush", "hedge", "distant",
+    "background", "skyline", "smokestack", "industrial plant", "horizon",
+)
+
+
+def _is_clutter(item):
+    blob = f"{item.get('name', '')} {item.get('desc', '')} {item.get('location', '')}".lower()
+    return any(k in blob for k in _CLUTTER_KEYWORDS)
+
 
 def _usable_ref(path):
     """True if path is a readable image > 1 KB. Guards against stale/corrupt
@@ -483,8 +513,11 @@ def stage_ingest(root, n, src_png):
 
 def stage_analyze(root, n, src, client):
     d = ID.scene_dir(root, n)
+    print("  analyzing scene: built elements...", flush=True)
     furn = client.analyze(P.ANALYSIS_FURNITURE, src)
+    print("  analyzing scene: site objects...", flush=True)
     objs = client.analyze(P.ANALYSIS_OBJECTS, src)
+    print("  analyzing scene: space / massing...", flush=True)
     space = client.analyze(P.ANALYSIS_SPACE, src)
     ID.write_text(os.path.join(d, "identity", "furniture", "_list.txt"), furn)
     ID.write_text(os.path.join(d, "identity", "objects", "_list.txt"), objs)
@@ -495,20 +528,37 @@ def stage_analyze(root, n, src, client):
 def stage_packshots(root, n, furniture, objects, client):
     # The source screenshot anchors object identity (the model must extract the
     # real item from the real room, not invent a generic one).
+    #
+    # Cost control: a packshot is one NanoBanana credit each, so skip trivial site
+    # clutter (parking lots, distant plant, planters, road markings...) and cap the
+    # total. Primary built elements / furniture come first so they're never cut.
     src = os.path.join(ID.scene_dir(root, n), "source.png")
+    budget = LIMITS["max_packshots"]
+    made = skipped = 0
     for kind, items, dirfn in (("furniture", furniture, ID.furniture_item_dir),
                                ("objects", objects, ID.object_item_dir)):
         for it in items:
+            if LIMITS["skip_clutter"] and _is_clutter(it):
+                skipped += 1
+                continue
+            if made >= budget:
+                skipped += 1
+                continue
             idir = dirfn(root, n, it["id"])
             ID.write_text(os.path.join(idir, "desc.txt"),
                           f"{it['name']} | {it['desc']} | {it['location']}")
             packshot = os.path.join(idir, "packshot_4view.png")
+            print(f"    packshot {made + 1}/{budget}: {it['name']}...", flush=True)
             client.generate(P.fill(P.GEN_PACKSHOT_4VIEW,
                                    desc=f"{it['name']}, {it['desc']} ({it['location']})"),
                             [src], packshot)
             ID.register_scene_item(root, n, kind, it["id"], {
                 "name": it["name"], "desc_path": os.path.join(idir, "desc.txt"),
                 "packshot": packshot, "location": it["location"]})
+            made += 1
+    if skipped:
+        print(f"    [cost] {made} packshots generated, {skipped} skipped "
+              f"(clutter/over budget of {budget})")
 
 
 def stage_space_map(root, n, space, client):
@@ -541,10 +591,13 @@ def stage_cast(root, cast_spec, client):
         ID.write_text(os.path.join(sdir, "desc.txt"), sp["desc"])
         sheet = os.path.join(sdir, "sheet_7angle.png")
         portrait = os.path.join(sdir, "portrait.png")
+        print("  cast: spokesman character sheet...", flush=True)
         client.generate(P.fill(P.GEN_CHARACTER_SHEET, n=7, desc=sp["desc"]), [], sheet)
+        print("  cast: spokesman portrait...", flush=True)
         client.generate(P.fill(P.GEN_PORTRAIT, desc=sp["desc"]), [], portrait)
         for i, garment in enumerate(sp.get("clothes", []), 1):
             cp = os.path.join(sdir, "clothes_packshots", f"garment_{i:02d}.png")
+            print(f"  cast: spokesman garment {i}...", flush=True)
             client.generate(P.fill(P.GEN_CLOTHES_PACKSHOT, desc=garment), [], cp)
         ID.register_cast(root, "spokesman", "spokesman",
                          {"desc_path": os.path.join(sdir, "desc.txt"),
@@ -555,7 +608,9 @@ def stage_cast(root, cast_spec, client):
         ID.write_text(os.path.join(adir, "desc.txt"), actor["desc"])
         sheet = os.path.join(adir, "sheet.png")
         portrait = os.path.join(adir, "portrait.png")
+        print(f"  cast: actor {aid} sheet...", flush=True)
         client.generate(P.fill(P.GEN_CHARACTER_SHEET, n=5, desc=actor["desc"]), [], sheet)
+        print(f"  cast: actor {aid} portrait...", flush=True)
         client.generate(P.fill(P.GEN_PORTRAIT, desc=actor["desc"]), [], portrait)
         ID.register_cast(root, "actors", aid,
                          {"desc_path": os.path.join(adir, "desc.txt"),
@@ -763,8 +818,9 @@ def stage_master_prompt(root, n, furniture, objects, space, client, prev_master=
 
 
 def stage_hero_composite(root, n, space, coords, client, prev_master=""):
-    """Stage I: generate 4 hero-composite variations (space + cast + coords).
+    """Stage I: generate hero-composite variations (space + cast + coords).
 
+    Variation count is LIMITS["hero_variations"] (each is one NanoBanana credit).
     `prev_master` provides the incoming-scene context for cross-scene continuity.
     """
     # Screenshot first (space ground truth), then character sheets + packshots.
@@ -774,8 +830,10 @@ def stage_hero_composite(root, n, space, coords, client, prev_master=""):
     prev_ctx = (f" Arriving from: {prev_master[:300]}.") if prev_master.strip() else ""
     prompt = P.fill(P.GEN_HERO_COMPOSITE, space=space, coords=coords_str) + prev_ctx
     variations = []
-    for v in range(1, 5):
+    count = max(1, int(LIMITS.get("hero_variations", 4)))
+    for v in range(1, count + 1):
         out = os.path.join(ID.scene_dir(root, n), "renders", f"hero_v{v}.png")
+        print(f"    hero variation {v}/{count}...", flush=True)
         client.generate(prompt, list(refs), out)   # fresh copy of refs each call
         variations.append(out)
     return variations
@@ -800,10 +858,47 @@ def stage_reconcile(root, n, furniture, objects, coords, client):
     return positive, negative
 
 
+def _inventory_text(furniture, objects, cast, root):
+    """Build a compact inventory string of every locked element for the inspector."""
+    lines = []
+    for it in furniture:
+        lines.append(f"{it['id']} ({it['name']}): {it['desc']}")
+    for it in objects:
+        lines.append(f"{it['id']} ({it['name']}): {it['desc']}")
+    sp = cast.get("spokesman", {})
+    if sp:
+        lines.append("spokesman: " + ID.read_text(sp.get("desc_path", ""), "spokesman"))
+    for aid, a in cast.get("actors", {}).items():
+        lines.append(f"{aid}: " + ID.read_text(a.get("desc_path", ""), aid))
+    return "\n".join(lines)
+
+
 def stage_inspect(root, n, furniture, objects, variations, client):
-    """Stage K: score every element in each hero variation; gate ≥90; emit report.json."""
+    """Stage K: score hero variations against the locked inventory; emit report.json.
+
+    Cost control via LIMITS["inspect_mode"]:
+      off  -> no Gemini calls; first variation chosen.
+      fast -> ONE holistic Gemini call per variation (default).
+      full -> one Gemini call PER element PER variation (most expensive).
+    """
     idx = ID.load_index(root)
     cast = idx.get("cast", {})
+    mode = LIMITS.get("inspect_mode", "fast")
+
+    # OFF: skip scoring entirely, keep the first variation.
+    if mode == "off" or not variations:
+        var_results = [{
+            "variation": f"hero_v{i}.png", "path": p, "scores": [],
+            "average": 0.0, "min_score": 0, "passes_gate": False,
+            "hallucinations": [], "skipped": True,
+        } for i, p in enumerate(variations, 1)]
+        report = {"scene": ID.scene_id(n), "gate_threshold": 90,
+                  "inspect_mode": "off", "variations": var_results,
+                  "best_variation": var_results[0]["variation"] if var_results else None,
+                  "best_passes_gate": False}
+        ID.write_json(os.path.join(ID.scene_dir(root, n), "report.json"), report)
+        return report, 0
+
     elements = []
     for it in furniture:
         elements.append({"id": it["id"], "label": it["name"], "desc": it["desc"]})
@@ -817,20 +912,35 @@ def stage_inspect(root, n, furniture, objects, variations, client):
         elements.append({"id": aid, "label": aid,
                          "desc": ID.read_text(a.get("desc_path", ""), aid)})
 
+    inventory = _inventory_text(furniture, objects, cast, root)
     var_results = []
     best_idx, best_avg = 0, -1.0
     for vi, hero_path in enumerate(variations, 1):
+        print(f"    scoring hero {vi}/{len(variations)} (inspect={mode})...", flush=True)
         scores, hallu_all = [], []
-        for el in elements:
-            raw = client.analyze(
-                P.fill(P.INSPECTOR, label=el["label"], desc=el["desc"]), hero_path)
+        if mode == "fast":
+            # One holistic call scores the whole composite (≈17x cheaper).
+            raw = client.analyze(P.fill(P.INSPECTOR_HOLISTIC, inventory=inventory),
+                                 hero_path)
             try:
                 parsed = json.loads(raw)
-                score = int(parsed.get("score", 0))
+                overall = int(parsed.get("score", 0))
                 hallu_all.extend(parsed.get("hallucinations", []))
             except (json.JSONDecodeError, TypeError, ValueError):
-                score = 0
-            scores.append({"element": el["id"], "label": el["label"], "score": score})
+                m = re.search(r'"score"\s*:\s*(\d+)', raw or "")
+                overall = int(m.group(1)) if m else 0
+            scores.append({"element": "overall", "label": "overall", "score": overall})
+        else:  # full
+            for el in elements:
+                raw = client.analyze(
+                    P.fill(P.INSPECTOR, label=el["label"], desc=el["desc"]), hero_path)
+                try:
+                    parsed = json.loads(raw)
+                    score = int(parsed.get("score", 0))
+                    hallu_all.extend(parsed.get("hallucinations", []))
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    score = 0
+                scores.append({"element": el["id"], "label": el["label"], "score": score})
         avg = sum(s["score"] for s in scores) / len(scores) if scores else 0.0
         min_score = min((s["score"] for s in scores), default=0)
         var_results.append({
@@ -854,6 +964,7 @@ def stage_inspect(root, n, furniture, objects, variations, client):
     report = {
         "scene": ID.scene_id(n),
         "gate_threshold": 90,
+        "inspect_mode": mode,
         "variations": var_results,
         "best_variation": var_results[best_idx]["variation"],
         "best_passes_gate": var_results[best_idx]["passes_gate"],
@@ -1085,6 +1196,20 @@ def main():
     ap.add_argument("--output-film", default="",
                     help="output path for the final composed film "
                          "(default: <project>/final_film.mp4)")
+    # --- Cost controls (each NanoBanana/Gemini call costs API credits) ---
+    ap.add_argument("--max-packshots", type=int, default=8,
+                    help="max element packshots to generate per scene (default 8). "
+                         "Lower = fewer NanoBanana credits.")
+    ap.add_argument("--inspect-mode", default="fast", choices=["off", "fast", "full"],
+                    help="QA scoring cost: off = none (pick first hero), fast = 1 "
+                         "Gemini call per hero variation (default), full = 1 per "
+                         "element per variation (most expensive).")
+    ap.add_argument("--hero-variations", type=int, default=4,
+                    help="how many hero composites to generate per scene "
+                         "(default 4; each is one NanoBanana credit).")
+    ap.add_argument("--keep-clutter", action="store_true",
+                    help="also packshot trivial site clutter (parking, planters, "
+                         "distant plant...). Off by default to save credits.")
     ap.add_argument("--vision-backend", default="gemini", choices=["gemini", "qwen"],
                     help="vision analysis backend for Stages B/G/J/K. 'gemini' (default) "
                          "uses the Gemini API node (reliable, high quality). 'qwen' uses "
@@ -1124,6 +1249,16 @@ def main():
     if args.scene_type == "exterior":
         print("[scene-type] EXTERIOR ArchViz mode "
               "(buildings, façades, landscaping, vehicles, signage)")
+
+    # Apply cost controls.
+    LIMITS["max_packshots"]   = max(0, args.max_packshots)
+    LIMITS["inspect_mode"]    = args.inspect_mode
+    LIMITS["hero_variations"] = max(1, args.hero_variations)
+    LIMITS["skip_clutter"]    = not args.keep_clutter
+    print(f"[cost] max_packshots={LIMITS['max_packshots']}  "
+          f"inspect={LIMITS['inspect_mode']}  "
+          f"hero_variations={LIMITS['hero_variations']}  "
+          f"skip_clutter={LIMITS['skip_clutter']}")
 
     ID.init_project(args.project)
     cast_spec = ID.read_json(args.cast, DEFAULT_CAST) if args.cast else DEFAULT_CAST
