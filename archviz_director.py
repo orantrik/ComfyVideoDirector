@@ -659,6 +659,11 @@ def _find_ffmpeg():
     exe = _sh.which("ffmpeg")
     if exe:
         return exe
+    # Common winget install location (PATH not yet refreshed in current shell).
+    _winget_link = os.path.expandvars(
+        r"%LOCALAPPDATA%\Microsoft\WinGet\Links\ffmpeg.exe")
+    if os.path.isfile(_winget_link):
+        return _winget_link
     try:
         import imageio_ffmpeg
         return imageio_ffmpeg.get_ffmpeg_exe()
