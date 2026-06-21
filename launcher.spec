@@ -2,7 +2,8 @@
 """
 PyInstaller spec for ArchViz Director launcher.
 Bundles:  launcher.py  +  archviz_director.py  +  core/  +  recipes/  +  nodes/
-Run:  pyinstaller launcher.spec
+Rebuild command (MUST use ComfyUI venv Python 3.12, not system Python 3.14):
+  C:\Users\oranbenshaprut\Documents\ComfyUI\.venv\Scripts\python.exe -m PyInstaller launcher.spec --noconfirm --clean
 Output:  dist/ArchVizDirector/ArchVizDirector.exe
 """
 
