@@ -314,13 +314,40 @@ def run_recipe_text(comfy_url, recipe_api_json_path, patches, client_id=None,
     pid = queue(comfy_url, api, client_id, extra_data=extra_data)
     hist = wait(comfy_url, pid, timeout=timeout)
     outs = hist.get("outputs", {}) or {}
-    # Prefer a named node; else scan for any string-like output.
+    # 1) Prefer a named node; else scan history for any string-like output.
     nodes = [str(text_node)] if text_node else list(outs.keys())
     for nid in nodes:
         data = outs.get(nid, {})
         for key, val in data.items():
             if isinstance(val, list) and val and isinstance(val[0], str):
-                return "\n".join(val)
-            if isinstance(val, str):
+                joined = "\n".join(v for v in val if isinstance(v, str)).strip()
+                if joined:
+                    return joined
+            if isinstance(val, str) and val.strip():
                 return val
+    # 2) Fallback: read the SaveText node's output file from disk. Vision/LLM nodes
+    #    (SimpleQwenVLgguf, GeminiNode) feed a SaveText sink that writes to disk but
+    #    exposes no usable history payload, so the steps above come back empty.
+    txt = _read_savetext_file(api)
+    if txt:
+        return txt
+    return ""
+
+
+def _read_savetext_file(api):
+    """Return the text written by a SaveText node in the graph, or '' if none."""
+    for node in api.values():
+        if not isinstance(node, dict) or node.get("class_type") != "SaveText":
+            continue
+        inp = node.get("inputs", {})
+        root = inp.get("root_dir")
+        fname = inp.get("file")
+        if not root or not fname:
+            continue
+        path = os.path.join(root, fname)
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                return fh.read().strip()
+        except OSError:
+            continue
     return ""

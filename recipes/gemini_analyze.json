@@ -1,0 +1,42 @@
+{
+  "_note": [
+    "Vision analysis via the Gemini API node (replaces local Qwen3-VL GGUF).",
+    "Used for Stages B/G/J/K. Authenticated with the same ComfyOrg/Gemini key as",
+    "GeminiNanoBanana2V2 (passed via extra_data.api_key_comfy_org).",
+    "PATCH MAP (controller fills at runtime):",
+    "  node '1' LoadImage  inputs.image        <- uploaded scene image filename",
+    "  node '2' GeminiNode inputs.prompt        <- analysis question",
+    "  node '2' GeminiNode inputs.system_prompt <- (optional) role preamble",
+    "  node '2' GeminiNode inputs.model         <- gemini model id",
+    "  node '2' GeminiNode inputs.seed          <- randomised per call (avoids cache)",
+    "TEXT OUTPUT: written by SaveText node '3' to output/gemini_analyze_output.txt and",
+    "read back from disk by run_recipe_text (SaveText exposes no history payload)."
+  ],
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "placeholder.png",
+      "upload": "image"
+    }
+  },
+  "2": {
+    "class_type": "GeminiNode",
+    "inputs": {
+      "prompt": "Placeholder \u2014 controller patches this with the analysis question.",
+      "model": "gemini-3-1-pro",
+      "seed": 42,
+      "images": ["1", 0],
+      "system_prompt": "You are an expert architectural visualization analyst. Analyze the provided image with precision and return structured, machine-readable responses. Describe only what is actually visible; never invent elements."
+    }
+  },
+  "3": {
+    "class_type": "SaveText",
+    "inputs": {
+      "root_dir": "C:\\Users\\oranbenshaprut\\Documents\\ComfyUI\\output",
+      "file": "gemini_analyze_output.txt",
+      "append": "overwrite",
+      "insert": false,
+      "text": ["2", 0]
+    }
+  }
+}

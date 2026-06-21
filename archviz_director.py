@@ -177,6 +177,7 @@ class ComfyClient:
         self.recipes = recipes_dir
         # Expected recipe files + the node ids the controller patches.
         self.qwen_recipe    = os.path.join(recipes_dir, "qwen_analyze.json")
+        self.gemini_analyze_recipe = os.path.join(recipes_dir, "gemini_analyze.json")
         self.nb_recipe      = os.path.join(recipes_dir, "nanobanana_gen.json")
         self.f5_recipe      = os.path.join(recipes_dir, "f5_tts.json")
         self.kokoro_recipe  = os.path.join(recipes_dir, "kokoro_tts.json")
@@ -189,6 +190,13 @@ class ComfyClient:
         #   nanobanana_gen.json: "1"=LoadImage(ref1) "2"=LoadImage(ref2)
         #                        "3"=GeminiNanoBanana2V2  "4"=SaveImage
         self.qwen_nodes   = {"image": "1", "user_prompt": "2", "text_out": "3"}
+        #   gemini_analyze.json: "1"=LoadImage "2"=GeminiNode "3"=SaveText
+        self.gemini_analyze_nodes = {"image": "1", "gemini": "2", "text_out": "3"}
+        # Vision backend for Stages B/G/J/K. The local Qwen3-VL GGUF path needs a
+        # newer llama-cpp-python (with Qwen3VLChatHandler); when that's missing it
+        # fails every inference, so the default is the reliable Gemini API node.
+        self.vision_backend = "gemini"          # "gemini" | "qwen"
+        self.vision_model   = "gemini-3-1-pro"  # GeminiNode model id
         self.nb_nodes     = {"prompt": "3", "image_1": "1", "image_2": "2", "save": "4"}
         # API-node auth + model selection (set from the GUI / CLI).
         #   api_token   -> sent as extra_data.api_key_comfy_org so Gemini/NanoBanana
@@ -225,20 +233,35 @@ class ComfyClient:
         return {"api_key_comfy_org": self.api_token} if self.api_token else None
 
     def analyze(self, user_prompt, image_path, system_prompt=""):
+        import random as _rng
         up = self.api.upload_image(self.url, image_path)
-        n = self.qwen_nodes
-        qwen_patch = {
-            "user_prompt":  user_prompt,
-            "model_path":   self.qwen_model_path,
-            "mmproj_path":  self.qwen_mmproj_path,
-        }
+        if self.vision_backend == "qwen":
+            n = self.qwen_nodes
+            qwen_patch = {
+                "user_prompt":  user_prompt,
+                "model_path":   self.qwen_model_path,
+                "mmproj_path":  self.qwen_mmproj_path,
+            }
+            if system_prompt:
+                qwen_patch["system_prompt"] = system_prompt
+            patches = {
+                n["image"]:      {"image": up},
+                n["user_prompt"]: qwen_patch,
+            }
+            return self.api.run_recipe_text(self.url, self.qwen_recipe, patches,
+                                            text_node=n["text_out"], extra_data=self._extra())
+        # Default: Gemini API vision node (reliable; uses the same API key).
+        n = self.gemini_analyze_nodes
+        gpatch = {"prompt": user_prompt, "seed": _rng.randint(0, 2 ** 31)}
+        if self.vision_model:
+            gpatch["model"] = self.vision_model
         if system_prompt:
-            qwen_patch["system_prompt"] = system_prompt
+            gpatch["system_prompt"] = system_prompt
         patches = {
-            n["image"]:      {"image": up},
-            n["user_prompt"]: qwen_patch,
+            n["image"]:  {"image": up},
+            n["gemini"]: gpatch,
         }
-        return self.api.run_recipe_text(self.url, self.qwen_recipe, patches,
+        return self.api.run_recipe_text(self.url, self.gemini_analyze_recipe, patches,
                                         text_node=n["text_out"], extra_data=self._extra())
 
     MAX_REFS = 14   # GeminiNanoBanana2V2 accepts up to 14 reference images
@@ -646,15 +669,58 @@ def stage_video(root, n, client, director_frames=""):
 #  Stages — Phase 2: G, I, J, K, L
 # --------------------------------------------------------------------------- #
 def stage_coordinates(root, n, src, client):
-    """Stage G (part 1): Qwen3-VL extracts x/y/area coordinates for every element."""
+    """Stage G (part 1): vision model extracts x/y/area coordinates for every element."""
     raw = client.analyze(P.ANALYSIS_COORDINATES, src)
     try:
         coords = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
         m = re.search(r"\[.*\]", raw, re.DOTALL)
-        coords = json.loads(m.group(0)) if m else []
+        try:
+            coords = json.loads(m.group(0)) if m else []
+        except (json.JSONDecodeError, TypeError):
+            coords = []
+    coords = _normalize_coords(coords, src)
     path = os.path.join(ID.scene_dir(root, n), "coordinates.json")
     ID.write_json(path, coords)
+    return coords
+
+
+def _normalize_coords(coords, src):
+    """Coerce x/y to fractions of 0..1 for the hero composite.
+
+    Vision models disagree on coordinate conventions even when asked for 0..1:
+      * already-normalized -> values <= 1.5, left as-is
+      * Gemini 0..1000 grid -> values up to ~1000, divided by 1000
+      * raw pixels         -> larger than the 0..1000 grid, divided by image size
+    """
+    if not isinstance(coords, list) or not coords:
+        return coords if isinstance(coords, list) else []
+    try:
+        xs = [c["x"] for c in coords if isinstance(c, dict) and isinstance(c.get("x"), (int, float))]
+        ys = [c["y"] for c in coords if isinstance(c, dict) and isinstance(c.get("y"), (int, float))]
+        if not xs or not ys:
+            return coords
+        mx, my = max(xs), max(ys)
+        if mx <= 1.5 and my <= 1.5:
+            return coords   # already normalized
+        if mx <= 1000 and my <= 1000:
+            wx = wy = 1000.0   # Gemini's 0..1000 normalized grid
+        else:
+            wx, wy = mx, my    # assume pixels; fall back to image dims
+            try:
+                from PIL import Image
+                with Image.open(src) as im:
+                    wx, wy = im.size
+            except Exception:
+                pass
+        for c in coords:
+            if isinstance(c, dict):
+                if isinstance(c.get("x"), (int, float)):
+                    c["x"] = round(min(max(c["x"] / wx, 0.0), 1.0), 4)
+                if isinstance(c.get("y"), (int, float)):
+                    c["y"] = round(min(max(c["y"] / wy, 0.0), 1.0), 4)
+    except Exception:
+        pass
     return coords
 
 
@@ -1019,6 +1085,13 @@ def main():
     ap.add_argument("--output-film", default="",
                     help="output path for the final composed film "
                          "(default: <project>/final_film.mp4)")
+    ap.add_argument("--vision-backend", default="gemini", choices=["gemini", "qwen"],
+                    help="vision analysis backend for Stages B/G/J/K. 'gemini' (default) "
+                         "uses the Gemini API node (reliable, high quality). 'qwen' uses "
+                         "the local Qwen3-VL GGUF (needs a recent llama-cpp-python with "
+                         "Qwen3VLChatHandler).")
+    ap.add_argument("--vision-model", default="gemini-3-1-pro",
+                    help="Gemini model id for vision analysis (default: gemini-3-1-pro).")
     ap.add_argument("--qwen-model-path",
                     default=r"C:\Users\oranbenshaprut\Documents\ComfyUI\models\LLM\Qwen3VL-8B-Instruct-Q8_0.gguf",
                     help="path to Qwen3-VL GGUF model file")
@@ -1063,6 +1136,8 @@ def main():
         client = ComfyClient(args.comfy_url, args.recipes)
         client.qwen_model_path  = args.qwen_model_path
         client.qwen_mmproj_path = args.qwen_mmproj_path
+        client.vision_backend   = args.vision_backend
+        client.vision_model     = args.vision_model
         client.api_token   = args.api_token
         client.image_model = args.image_model
         # Override director recipe path if explicitly specified

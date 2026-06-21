@@ -37,11 +37,14 @@ ANALYSIS_SPACE = (
 )
 
 ANALYSIS_COORDINATES = (
-    "Look at this image. For EVERY visible element (each furniture piece, each "
-    "object, and any people), return strict JSON: a list of "
-    '{"id","label","kind","x","y","area"} where x,y are normalized 0..1 image '
-    "coordinates of the element's centre and area is the zone it sits in. Output "
-    "ONLY the JSON array, nothing else."
+    "Look at this image. For EVERY visible element (each major built/structural "
+    "element or furniture piece, each object, and any people), return strict JSON: "
+    'a list of {"id","label","kind","x","y","area"}. '
+    "x and y are the element's CENTRE expressed as FRACTIONS of the image width and "
+    "height \u2014 each a decimal between 0.0 and 1.0 (left edge x=0.0, right edge x=1.0, "
+    "top y=0.0, bottom y=1.0; e.g. dead centre = 0.5,0.5). Do NOT output pixel "
+    "values. 'kind' is one of furniture, object or person. 'area' is the zone it "
+    "sits in. Output ONLY the JSON array, nothing else."
 )
 
 # --------------------------------------------------------------------------- #
