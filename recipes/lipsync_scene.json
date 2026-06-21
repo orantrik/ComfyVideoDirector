@@ -72,7 +72,7 @@
       "audio_scale": 1,
       "audio_to_video_scale": 1,
       "video_to_audio_scale": 1,
-      "triton_kernels": true
+      "triton_kernels": false
     }
   },
   "430": {

@@ -1706,6 +1706,24 @@ def main():
     if director_frames:
         print(f"[director mode] frames folder: {director_frames}")
 
+    # Pre-flight: validate the video recipe against the LIVE ComfyUI server now,
+    # BEFORE the expensive image stages run, so missing nodes are reported once
+    # up front instead of one-per-failed-run after credits are already spent.
+    if 4 in phases and not args.director_frames and hasattr(client, "api") \
+            and hasattr(client, "lipsync_recipe"):
+        try:
+            issues = client.api.preflight_recipe(client.url, client.lipsync_recipe)
+        except Exception:
+            issues = []
+        if issues:
+            print("\n" + "=" * 60)
+            print("PRE-FLIGHT: the video recipe needs nodes that are NOT installed")
+            print("in ComfyUI. Fix these BEFORE running, or pass --phases 1,2,3")
+            print("to skip video for now:")
+            for it in issues:
+                print(f"   - {it}")
+            print("=" * 60 + "\n", flush=True)
+
     prev_master = ""
     scene_phases = phases - {5}   # phases 1-4 run per scene; 5 is post-loop
     for n, src in zip(scene_nums, frames):

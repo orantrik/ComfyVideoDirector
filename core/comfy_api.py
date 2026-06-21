@@ -202,6 +202,37 @@ def collect_videos(history, video_node=None):
     return out
 
 
+def preflight_recipe(comfy_url, recipe_api_json_path):
+    """Validate a recipe against the LIVE server BEFORE queuing it.
+
+    Returns a list of human-readable problem strings (empty list = all good).
+    Catches every missing node type at once instead of one-per-failed-run, so
+    the operator can fix the environment before spending credits on the earlier
+    image stages. Never raises — on any error it returns [] (skip the check).
+    """
+    problems = []
+    try:
+        r = urllib.request.urlopen(comfy_url.rstrip("/") + "/object_info", timeout=10)
+        available = set(json.load(r).keys())
+    except Exception:
+        return problems  # server unreachable / old build — don't block
+
+    try:
+        api = json.load(open(recipe_api_json_path, encoding="utf-8"))
+    except Exception as exc:
+        return [f"cannot read recipe {os.path.basename(recipe_api_json_path)}: {exc}"]
+
+    nodes = {k: v for k, v in api.items() if not k.startswith("_")}
+    virtual = {"SetNode", "GetNode", "Reroute", "PrimitiveNode"}
+    missing = sorted({v.get("class_type", "")
+                      for v in nodes.values()
+                      if v.get("class_type") not in available
+                      and v.get("class_type") not in virtual})
+    for ct in missing:
+        problems.append(f"missing ComfyUI node: '{ct}' (install the pack that provides it)")
+    return problems
+
+
 def run_recipe_video(comfy_url, recipe_api_json_path, patches, out_path, client_id=None,
                      timeout=3600, video_node=None, extra_data=None):
     """Run an LTX / video recipe. Saves the video output to out_path (.mp4).
