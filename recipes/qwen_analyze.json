@@ -1,0 +1,56 @@
+{
+  "_note": [
+    "Stage B/G/J/K — Qwen3-VL vision analysis recipe.",
+    "PATCH MAP (controller fills at runtime):",
+    "  node '1' LoadImage           inputs.image       <- uploaded scene image filename",
+    "  node '2' SimpleQwenVLgguf    inputs.user_prompt <- analysis question",
+    "  node '2' SimpleQwenVLgguf    inputs.system_prompt <- (optional) role preamble",
+    "  node '2' SimpleQwenVLgguf    inputs.model_path  <- path to Qwen3-VL GGUF model",
+    "  node '2' SimpleQwenVLgguf    inputs.mmproj_path <- path to mmproj GGUF model",
+    "TEXT OUTPUT: collected from node '3' (SaveText) history entry."
+  ],
+  "_model_note": [
+    "Default model paths match the paths used in your ClaudeImageGen.json workflow.",
+    "Override with --qwen-model-path and --qwen-mmproj-path CLI flags if your",
+    "model files are in a different location."
+  ],
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "placeholder.png",
+      "upload": "image"
+    }
+  },
+  "2": {
+    "class_type": "SimpleQwenVLgguf",
+    "inputs": {
+      "image": ["1", 0],
+      "system_prompt": "You are an expert architectural visualization analyst. Analyze the provided image with precision and return structured, machine-readable responses.",
+      "user_prompt": "Placeholder — controller patches this with the analysis question.",
+      "model_path": "H:\\Qwen3VL-8B-Instruct-Q8_0.gguf",
+      "mmproj_path": "H:\\mmproj-Qwen3VL-8B-Instruct-F16.gguf",
+      "output_max_tokens": 2048,
+      "image_max_tokens": 4096,
+      "ctx": 8192,
+      "n_batch": 512,
+      "gpu_layers": -1,
+      "temperature": 0.3,
+      "seed": 42,
+      "unload_all_models": false,
+      "top_p": 0.92,
+      "repeat_penalty": 1.2,
+      "top_k": 0,
+      "pool_size": 4194304
+    }
+  },
+  "3": {
+    "class_type": "SaveText",
+    "inputs": {
+      "text": ["2", 0],
+      "root_dir": "C:\\Users\\oranbenshaprut\\Documents\\ComfyUI\\output",
+      "file": "qwen_output.txt",
+      "append": "overwrite",
+      "insert": false
+    }
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "_note": [
+    "Stage C/D/E/I — GeminiNanoBanana2V2 image generation recipe.",
+    "PATCH MAP (controller fills at runtime):",
+    "  node '1' LoadImage              inputs.image <- uploaded reference image 1 filename",
+    "  node '2' LoadImage              inputs.image <- uploaded reference image 2 filename",
+    "  node '3' GeminiNanoBanana2V2    inputs.prompt <- generation prompt text",
+    "  node '4' SaveImage              inputs.filename_prefix <- scene-specific prefix",
+    "",
+    "Reference images are optional — nodes 1 and 2 are only used when ref_paths are supplied.",
+    "If no refs are supplied, the connections model.images.image_1/2 are still present but",
+    "LoadImage will use the placeholder PNG (which is a harmless 1x1 pixel).",
+    "",
+    "Gemini API key must be configured in comfy-api-liberation settings."
+  ],
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "placeholder.png",
+      "upload": "image"
+    }
+  },
+  "2": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "placeholder.png",
+      "upload": "image"
+    }
+  },
+  "3": {
+    "class_type": "GeminiNanoBanana2V2",
+    "inputs": {
+      "prompt": "Placeholder — controller patches this with the generation prompt.",
+      "model": "Nano Banana 2 (Gemini 3.1 Flash Image)",
+      "model.aspect_ratio": "auto",
+      "model.resolution": "1K",
+      "model.thinking_level": "MINIMAL",
+      "model.images.image_1": ["1", 0],
+      "model.images.image_2": ["2", 0],
+      "seed": 42,
+      "response_modalities": "IMAGE",
+      "system_prompt": "You are an expert architectural visualization image generator. Follow the prompt precisely, maintaining photorealism and brand consistency."
+    }
+  },
+  "4": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": ["3", 0],
+      "filename_prefix": "archviz_gen"
+    }
+  }
+}

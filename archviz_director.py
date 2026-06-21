@@ -131,9 +131,15 @@ class ComfyClient:
         self.f5_recipe      = os.path.join(recipes_dir, "f5_tts.json")
         self.kokoro_recipe  = os.path.join(recipes_dir, "kokoro_tts.json")
         self.lipsync_recipe = os.path.join(recipes_dir, "lipsync_scene.json")
-        # Node-id maps — must match the exported recipe graphs:
-        self.qwen_nodes   = {"image": None, "user_prompt": None, "text_out": None}
-        self.nb_nodes     = {"prompt": None, "image_1": None, "image_2": None, "save": None}
+        # Node-id maps — match qwen_analyze.json and nanobanana_gen.json layouts:
+        #   qwen_analyze.json:   "1"=LoadImage  "2"=SimpleQwenVLgguf  "3"=SaveText
+        #   nanobanana_gen.json: "1"=LoadImage(ref1) "2"=LoadImage(ref2)
+        #                        "3"=GeminiNanoBanana2V2  "4"=SaveImage
+        self.qwen_nodes   = {"image": "1", "user_prompt": "2", "text_out": "3"}
+        self.nb_nodes     = {"prompt": "3", "image_1": "1", "image_2": "2", "save": "4"}
+        # Qwen model paths — set from CLI or defaults from ClaudeImageGen.json workflow
+        self.qwen_model_path  = "H:\\Qwen3VL-8B-Instruct-Q8_0.gguf"
+        self.qwen_mmproj_path = "H:\\mmproj-Qwen3VL-8B-Instruct-F16.gguf"
         # F5-TTS node IDs — match f5_tts.json layout:
         #   "1"=LoadAudio, "2"=F5TTSAudioInputs, "3"=SaveAudio
         self.f5_nodes     = {"ref_audio": "1", "text": "2", "save": "3"}
@@ -156,13 +162,20 @@ class ComfyClient:
 
     def analyze(self, user_prompt, image_path, system_prompt=""):
         up = self.api.upload_image(self.url, image_path)
-        patches = {}
-        if self.qwen_nodes["image"]:
-            patches[self.qwen_nodes["image"]] = {"image": up}
-        if self.qwen_nodes["user_prompt"]:
-            patches[self.qwen_nodes["user_prompt"]] = {"user_prompt": user_prompt}
+        n = self.qwen_nodes
+        qwen_patch = {
+            "user_prompt":  user_prompt,
+            "model_path":   self.qwen_model_path,
+            "mmproj_path":  self.qwen_mmproj_path,
+        }
+        if system_prompt:
+            qwen_patch["system_prompt"] = system_prompt
+        patches = {
+            n["image"]:      {"image": up},
+            n["user_prompt"]: qwen_patch,
+        }
         return self.api.run_recipe_text(self.url, self.qwen_recipe, patches,
-                                        text_node=self.qwen_nodes["text_out"])
+                                        text_node=n["text_out"])
 
     def generate(self, prompt, ref_paths, out_path):
         patches = {}
@@ -799,6 +812,12 @@ def main():
     ap.add_argument("--output-film", default="",
                     help="output path for the final composed film "
                          "(default: <project>/final_film.mp4)")
+    ap.add_argument("--qwen-model-path",
+                    default="H:\\Qwen3VL-8B-Instruct-Q8_0.gguf",
+                    help="path to Qwen3-VL GGUF model file (default: H:\\Qwen3VL-8B-Instruct-Q8_0.gguf)")
+    ap.add_argument("--qwen-mmproj-path",
+                    default="H:\\mmproj-Qwen3VL-8B-Instruct-F16.gguf",
+                    help="path to Qwen3-VL mmproj GGUF file (default: H:\\mmproj-Qwen3VL-8B-Instruct-F16.gguf)")
     args = ap.parse_args()
 
     phases = set(int(p.strip()) for p in args.phases.split(",") if p.strip())
@@ -812,6 +831,8 @@ def main():
             print("[note] no --recipes given; running dry-run.")
     else:
         client = ComfyClient(args.comfy_url, args.recipes)
+        client.qwen_model_path  = args.qwen_model_path
+        client.qwen_mmproj_path = args.qwen_mmproj_path
 
     if 1 in phases:
         stage_cast(args.project, cast_spec, client)
