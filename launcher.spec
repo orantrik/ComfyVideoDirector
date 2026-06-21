@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""
+r"""
 PyInstaller spec for ArchViz Director launcher.
 Bundles:  launcher.py  +  archviz_director.py  +  core/  +  recipes/  +  nodes/
 Rebuild command (MUST use ComfyUI venv Python 3.12, not system Python 3.14):
@@ -30,11 +30,13 @@ a = Analysis(
         "tkinter.scrolledtext", "tkinter.messagebox",
         "urllib.request", "json", "struct", "base64",
         "core.identity", "core.comfy_api", "core.prompts_archviz",
+        "core.gallery",
+        "PIL", "PIL.Image", "PIL.ImageTk",
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["matplotlib", "numpy", "PIL", "cv2"],
+    excludes=["matplotlib", "cv2"],
     noarchive=False,
     optimize=0,
 )
