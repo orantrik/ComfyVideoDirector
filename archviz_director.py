@@ -1340,7 +1340,8 @@ def run_scene(root, n, src, client, phases=(1, 2, 3, 4),
         # so Stage K always scores photorealistic images.  A 90% realism gate ensures
         # only near-real renders advance; feedback from the inspector loop fixes problems.
         if LIMITS.get("photoreal", True):
-            print("  upgrading all variations to Pro (Stage I.5)...", flush=True)
+            print(f"  upgrading all variations to Nano Banana Pro "
+                  f"[{client.hero_model}] (Stage I.5)...", flush=True)
             stage_photoreal_each_variation(
                 root, n, variations, src, space, client,
                 attempts=LIMITS.get("photoreal_attempts", 3),
