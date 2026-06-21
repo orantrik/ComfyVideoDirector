@@ -339,12 +339,12 @@
     }
   },
   "343": {
-    "class_type": "VAELoader",
+    "class_type": "AIDirectorVAELoaderSafe",
     "inputs": {
       "vae_name": "LTX23_audio_vae_bf16.safetensors"
     },
     "_meta": {
-      "title": "VAELoader (audio, core - avoids comfy-aimdo mmap crash)"
+      "title": "Safe VAE Loader (audio, bypasses comfy-aimdo mmap crash)"
     }
   },
   "313": {

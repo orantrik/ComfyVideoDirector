@@ -10,6 +10,7 @@ from .nodes.segment_picker import SegmentPromptPicker
 from .nodes.load_frame import AIDirectorLoadFrame
 from .nodes.auto_loop import AIDirectorAutoLoop, AIDirectorStoreFrame, AIDirectorStoreCaption
 from .nodes.object_lock import AIDirectorObjectLock
+from .nodes.audio_vae_loader import AIDirectorVAELoaderSafe
 
 NODE_CLASS_MAPPINGS = {
     "AIDirectorProjectSetup": AIDirectorProjectSetup,
@@ -24,6 +25,7 @@ NODE_CLASS_MAPPINGS = {
     "AIDirectorStoreFrame": AIDirectorStoreFrame,
     "AIDirectorStoreCaption": AIDirectorStoreCaption,
     "AIDirectorObjectLock": AIDirectorObjectLock,
+    "AIDirectorVAELoaderSafe": AIDirectorVAELoaderSafe,
     "ManifestExporter": ManifestExporter,
     "VideoAssembler": VideoAssembler,
 }
@@ -41,6 +43,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "AIDirectorStoreFrame": "AI Director - Store Last Frame (+advance)",
     "AIDirectorStoreCaption": "AI Director - Store Caption (VLM feedback)",
     "AIDirectorObjectLock": "AI Director - Use Existing Objects (anti-hallucination)",
+    "AIDirectorVAELoaderSafe": "AI Director - Safe VAE Loader (audio/aimdo-proof)",
     "ManifestExporter": "AI Director - Manifest Exporter",
     "VideoAssembler": "AI Director - Video Assembler",
 }

@@ -122,8 +122,8 @@
     }
   },
   "343": {
-    "_note": "Core VAELoader (not VAELoaderKJ): comfy.sd.VAE natively detects the LTX audio VAE and does the audio_vae.->autoencoder. prefix swap. VAELoaderKJ does its own 'key in sd'/dict(sd) checks which crash on the desktop's comfy-aimdo lazy ModelMMAP loader (get_file_handle).",
-    "class_type": "VAELoader",
+    "_note": "Safe audio VAE loader: reads the .safetensors directly via the safetensors lib (bypassing comfy-aimdo's lazy ModelMMAP loader), then builds comfy.sd.VAE on a real dict. Core VAELoader AND VAELoaderKJ both crash here because comfy.sd.VAE runs state_dict_prefix_replace over the lazy dict -> 'ModelMMAP has no attribute get_file_handle'.",
+    "class_type": "AIDirectorVAELoaderSafe",
     "inputs": {
       "vae_name": "LTX23_audio_vae_bf16.safetensors"
     }
