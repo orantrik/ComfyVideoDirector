@@ -150,8 +150,9 @@ class ComfyClient:
         self.qwen_nodes   = {"image": "1", "user_prompt": "2", "text_out": "3"}
         self.nb_nodes     = {"prompt": "3", "image_1": "1", "image_2": "2", "save": "4"}
         # Qwen model paths — set from CLI or defaults from ClaudeImageGen.json workflow
-        self.qwen_model_path  = "H:\\Qwen3VL-8B-Instruct-Q8_0.gguf"
-        self.qwen_mmproj_path = "H:\\mmproj-Qwen3VL-8B-Instruct-F16.gguf"
+        _llm = r"C:\Users\oranbenshaprut\Documents\ComfyUI\models\LLM"
+        self.qwen_model_path  = os.path.join(_llm, "Qwen3VL-8B-Instruct-Q8_0.gguf")
+        self.qwen_mmproj_path = os.path.join(_llm, "mmproj-Qwen3VL-8B-Instruct-F16.gguf")
         # F5-TTS node IDs — match f5_tts.json layout:
         #   "1"=LoadAudio, "2"=F5TTSAudioInputs, "3"=SaveAudio
         self.f5_nodes     = {"ref_audio": "1", "text": "2", "save": "3"}
@@ -870,10 +871,10 @@ def main():
                     help="output path for the final composed film "
                          "(default: <project>/final_film.mp4)")
     ap.add_argument("--qwen-model-path",
-                    default="H:\\Qwen3VL-8B-Instruct-Q8_0.gguf",
+                    default=r"C:\Users\oranbenshaprut\Documents\ComfyUI\models\LLM\Qwen3VL-8B-Instruct-Q8_0.gguf",
                     help="path to Qwen3-VL GGUF model file")
     ap.add_argument("--qwen-mmproj-path",
-                    default="H:\\mmproj-Qwen3VL-8B-Instruct-F16.gguf",
+                    default=r"C:\Users\oranbenshaprut\Documents\ComfyUI\models\LLM\mmproj-Qwen3VL-8B-Instruct-F16.gguf",
                     help="path to Qwen3-VL mmproj GGUF file")
     # --- Director mode (uses ClaudeVideoGen_AIDirector workflow) ---
     ap.add_argument("--director-frames", default="",
