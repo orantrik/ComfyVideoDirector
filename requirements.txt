@@ -1,0 +1,3 @@
+# v1 backend is stdlib-only. ffmpeg is required for the Video Assembler node.
+# If ffmpeg is not on PATH, this provides a bundled binary:
+imageio-ffmpeg

@@ -1,0 +1,25 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.eggs/
+*.log
+
+# Project output folders (not source)
+/output/
+/renders/
+*.mp4
+*.mov
+*.webm
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
