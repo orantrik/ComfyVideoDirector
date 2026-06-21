@@ -985,6 +985,70 @@ def stage_master_prompt(root, n, furniture, objects, space, client, prev_master=
     return master, audio
 
 
+def stage_photoreal_each_variation(root, n, variations, src, space, client,
+                                   attempts=3, min_score=90, resolution="2K"):
+    """Stage I.5: upgrade every Flash hero variation to Nano Banana Pro immediately
+    after generation so the inspector (Stage K) always scores the photorealistic
+    version.  Each variation is replaced in-place; a side-car *_pro.png is kept
+    as the reuse-cache so re-runs skip the expensive Pro call when unchanged.
+
+    min_score = 90  (practical interpretation of the user's "99% logical and
+    photorealistic" target — the realism inspector's 0-100 scale tops out around
+    95-98 for a genuine DSLR photo, so 90 is the right gate for near-perfect output)
+    """
+    for i, var_path in enumerate(variations, 1):
+        if not os.path.isfile(var_path):
+            continue
+        pro_cache = var_path.replace(".png", "_pro.png")
+        # Reuse if the Pro version already passed the gate.
+        if CACHE.should_skip(pro_cache, kind="hero_pro",
+                             min_score=LIMITS.get("photoreal_min", min_score)):
+            print(f"    [reuse] var {i} Pro render (passed quality gate)", flush=True)
+            shutil.copyfile(pro_cache, var_path)
+            continue
+
+        refs     = [src, var_path] + list(ID.reference_images(root, n))
+        tmp      = var_path + "._pro_try.png"
+        feedback = ""
+        best_score = -1
+        for attempt in range(1, max(1, attempts) + 1):
+            print(f"    photoreal var {i}/{len(variations)} "
+                  f"(Pro attempt {attempt}/{attempts})...", flush=True)
+            prompt = P.fill(P.GEN_PHOTOREAL_VARIATION, space=space) + feedback
+            try:
+                client.generate_pro(prompt, refs, tmp, resolution=resolution)
+            except Exception as exc:
+                print(f"    [photoreal] Pro render error: {exc}", flush=True)
+                break
+            raw = client.analyze(P.REALISM_INSPECTOR, tmp)
+            try:
+                parsed   = json.loads(raw)
+                score    = int(parsed.get("score", 0))
+                problems = parsed.get("problems", [])
+            except (json.JSONDecodeError, TypeError, ValueError):
+                m = re.search(r'"score"\s*:\s*(\d+)', raw or "")
+                score, problems = (int(m.group(1)) if m else 0), []
+            print(f"      realism score: {score}%", flush=True)
+            if score > best_score:
+                best_score = score
+                shutil.copyfile(tmp, pro_cache)
+            if score >= min_score:
+                break
+            if problems:
+                feedback = ("\n\nFIX THESE PHOTOREALISM PROBLEMS FROM PREVIOUS "
+                            "ATTEMPT: " + "; ".join(str(p) for p in problems))
+
+        # Replace Flash variation with best Pro render.
+        if os.path.isfile(pro_cache):
+            shutil.copyfile(pro_cache, var_path)
+            CACHE.record(pro_cache, kind="hero_pro", score=best_score)
+            print(f"    var {i} upgraded [realism {best_score}%]", flush=True)
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
 def stage_hero_composite(root, n, space, coords, client, prev_master=""):
     """Stage I: generate hero-composite variations (space + cast + coords).
 
@@ -1271,6 +1335,19 @@ def run_scene(root, n, src, client, phases=(1, 2, 3, 4),
         variations = stage_hero_composite(root, n, space, coords, client,
                                           prev_master=prev_master)
         print(f"  hero composite: {len(variations)} variations (Stage I)")
+
+        # Stage I.5: upgrade every variation to Nano Banana Pro BEFORE the inspector
+        # so Stage K always scores photorealistic images.  A 90% realism gate ensures
+        # only near-real renders advance; feedback from the inspector loop fixes problems.
+        if LIMITS.get("photoreal", True):
+            print("  upgrading all variations to Pro (Stage I.5)...", flush=True)
+            stage_photoreal_each_variation(
+                root, n, variations, src, space, client,
+                attempts=LIMITS.get("photoreal_attempts", 3),
+                min_score=LIMITS.get("photoreal_min", 90),
+                resolution=LIMITS.get("hero_resolution", "2K"))
+            print("  all variations upgraded to Pro (Stage I.5)")
+
         stage_reconcile(root, n, furniture, objects, coords, client)
         print("  prompts reconciled (Stage J)")
         report, best_idx = stage_inspect(root, n, furniture, objects, variations, client)
@@ -1278,14 +1355,6 @@ def run_scene(root, n, src, client, phases=(1, 2, 3, 4),
         gate = "PASS" if vr["passes_gate"] else f"best={vr['average']:.0f}%"
         print(f"  inspector done [{gate}] (Stage K)")
         stage_lock_hero(root, n, variations, best_idx, report)
-
-    # Stage P: photoreal finish on the locked hero (runs for fresh or reused heroes).
-    if 2 in phases and LIMITS.get("photoreal", True):
-        stage_photoreal_finish(
-            root, n, client,
-            attempts=LIMITS.get("photoreal_attempts", 3),
-            min_score=LIMITS.get("photoreal_min", 80),
-            resolution=LIMITS.get("hero_resolution", "2K"))
 
     if 4 in phases:
         stage_video(root, n, client, director_frames=director_frames)

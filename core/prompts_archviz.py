@@ -211,6 +211,50 @@ MASTER_PROMPT_EXT = (
 
 
 # --------------------------------------------------------------------------- #
+#  Stage I.5 - per-variation photoreal upgrade (runs right after Flash composite)
+# --------------------------------------------------------------------------- #
+GEN_PHOTOREAL_VARIATION = (
+    "You have TWO main references:\n"
+    "  REFERENCE 1 (FIRST image) = the ORIGINAL UNREAL ENGINE RENDER of the real "
+    "architectural scene. This is the ABSOLUTE AUTHORITY for:\n"
+    "    • Spatial layout, camera angle, building positions and heights\n"
+    "    • All proportions and real-world scale — roads, kerbs, pavements, buildings, "
+    "      trees, vehicles, and every other element must match Reference 1 exactly\n"
+    "    • Elements that are OCCLUDED or cut off in Reference 2: RESTORE them from "
+    "      Reference 1 — complete roads, continue buildings, fill in landscape exactly "
+    "      as Reference 1 shows them; do not invent replacements\n"
+    "    • Lighting direction, sky colour, time of day and natural depth of field\n"
+    "  REFERENCE 2 (SECOND image) = the AI-generated composition. Use it ONLY for "
+    "the position and approximate pose of each person and any specifically added prop. "
+    "Completely IGNORE its CGI textures, wrong scale, plastic look, artificial "
+    "lighting or any 3D-render or Unreal Engine artefacts.\n"
+    "  REMAINING REFERENCES = identity sheets for the people — match face, hair and "
+    "outfit exactly.\n\n"
+    "YOUR TASK: produce a single HYPER-PHOTOREALISTIC photograph that:\n"
+    "  1. Matches the EXACT spatial layout, proportions and scale of Reference 1\n"
+    "  2. Places the people from Reference 2 at correct positions AND correct scale "
+    "     relative to the real architecture (person height must look believable next "
+    "     to the real doors, kerbs, cars and building base)\n"
+    "  3. Fully RESTORES any element from Reference 1 that is occluded, missing, "
+    "     cut off or distorted in Reference 2\n"
+    "  4. Looks like a genuine high-end DSLR photograph: real materials, physically "
+    "     accurate lighting and shadows, natural depth of field, subtle film grain\n\n"
+    "HARD RULES — any violation = realism failure:\n"
+    "  • Correct human scale: person height matches adjacent kerbs, cars, doors, floors\n"
+    "  • Real road and pavement: correct width and geometry from Reference 1 — no "
+    "    melted, over-smooth, CGI or distorted surfaces\n"
+    "  • Every object that exists in Reference 1 (monuments, vehicles, statues, signs, "
+    "    lamp posts) must look like a physical real-world object — correct material, "
+    "    cast shadows, real depth and texture\n"
+    "  • Natural trees and foliage: varied silhouettes, real leaf clusters, no "
+    "    billboard sprite artefacts or repeating textures\n"
+    "  • No floating objects, no duplicate people, no warped or extra limbs\n"
+    "  • No CGI bloom, no plastic skin, no videogame shading, no Unreal Engine look\n\n"
+    "Scene context (secondary cross-check only): {space}."
+)
+
+
+# --------------------------------------------------------------------------- #
 #  Stage P - ultra-photorealistic finish (Nano Banana Pro) + realism inspector
 # --------------------------------------------------------------------------- #
 GEN_PHOTOREAL_HERO = (
