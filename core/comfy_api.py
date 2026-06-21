@@ -149,20 +149,26 @@ import urllib.parse  # noqa: E402  (after functions, used by _download)
 
 
 def upload_audio(comfy_url, filepath, overwrite=True):
-    """POST /upload/audio as multipart; returns the stored name."""
+    """Upload an audio file to ComfyUI's input dir; returns the stored name.
+
+    ComfyUI has no dedicated /upload/audio route (it returns 405). All input
+    files — images, audio and video — are uploaded through POST /upload/image
+    with the multipart field name "image"; the file lands in the input folder
+    where LoadAudio can reference it by name.
+    """
     boundary = "----aidir" + uuid.uuid4().hex
     fname = os.path.basename(filepath)
     with open(filepath, "rb") as fh:
         filedata = fh.read()
     body = b""
     body += f"--{boundary}\r\n".encode()
-    body += f'Content-Disposition: form-data; name="audio"; filename="{fname}"\r\n'.encode()
+    body += f'Content-Disposition: form-data; name="image"; filename="{fname}"\r\n'.encode()
     body += b"Content-Type: application/octet-stream\r\n\r\n" + filedata + b"\r\n"
     body += f"--{boundary}\r\n".encode()
     body += b'Content-Disposition: form-data; name="overwrite"\r\n\r\n'
     body += (b"true" if overwrite else b"false") + b"\r\n"
     body += f"--{boundary}--\r\n".encode()
-    req = urllib.request.Request(comfy_url.rstrip("/") + "/upload/audio", data=body,
+    req = urllib.request.Request(comfy_url.rstrip("/") + "/upload/image", data=body,
                                  headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
     with urllib.request.urlopen(req, timeout=120) as r:
         info = json.loads(r.read().decode("utf-8"))
